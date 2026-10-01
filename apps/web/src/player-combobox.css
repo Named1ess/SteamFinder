@@ -1,0 +1,166 @@
+.analysis-person {
+  align-items: flex-start;
+}
+.analysis-person > .person-marker {
+  margin-top: 23px;
+}
+.analysis-person .player-combobox {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.player-combobox-label {
+  display: block;
+  color: #8fa4b8;
+  font-size: 10px;
+  margin-bottom: 7px;
+}
+.player-combobox-field {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 8px;
+  border: 1px solid #35495d;
+  border-radius: 5px;
+  background: #101c2a;
+  color: #83a3ba;
+}
+.player-combobox-field:focus-within {
+  border-color: #74cbb9;
+  box-shadow: 0 0 0 2px #74cbb914;
+}
+.player-combobox-field > svg {
+  flex-shrink: 0;
+}
+.player-combobox-field input {
+  width: 100%;
+  min-width: 0;
+  padding: 9px 0;
+  color: #deebf5;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font: inherit;
+  font-size: 11px;
+}
+.player-combobox-field input::placeholder {
+  color: #7990a6;
+}
+.player-combobox-field:has(input:disabled) {
+  opacity: 0.5;
+}
+.player-combobox-clear {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: #9db3c7;
+  cursor: pointer;
+}
+.player-combobox-clear:hover {
+  background: #293e50;
+  color: #eff8ff;
+}
+.player-combobox-selection {
+  display: block;
+  margin-top: 5px;
+  font-size: 9px;
+  line-height: 1.5;
+  color: #869eb3;
+  overflow-wrap: anywhere;
+}
+.player-combobox-popup {
+  margin-top: 7px;
+  padding: 4px;
+  background: #152535;
+  border: 1px solid #3b536a;
+  border-radius: 6px;
+  box-shadow: 0 12px 30px #0008;
+}
+.player-combobox-options {
+  max-height: 240px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: #506579 #152535;
+}
+.player-combobox-options > button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  width: 100%;
+  padding: 9px 8px;
+  text-align: left;
+  border: 0;
+  border-radius: 4px;
+  color: #d5e3ee;
+  background: transparent;
+  cursor: pointer;
+}
+.player-combobox-options > button.active,
+.player-combobox-options > button:hover {
+  background: #294252;
+}
+.player-combobox-options > button[aria-selected="true"] {
+  color: #9be4cf;
+}
+.player-combobox-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.player-combobox-option-text strong {
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.player-combobox-option-text > span {
+  color: #99afc3;
+  font-size: 9px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.player-combobox-count,
+.player-combobox-message {
+  padding: 9px 7px;
+  font-size: 10px;
+  color: #a1b8ca;
+  line-height: 1.7;
+}
+.player-combobox-count {
+  border-top: 1px solid #2c4256;
+}
+.player-combobox-message {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.player-combobox-error {
+  flex-wrap: wrap;
+  color: #f1b8ac;
+}
+.player-combobox-error button {
+  color: #a3e4d1;
+  border: 1px solid #45695f;
+  border-radius: 3px;
+  background: transparent;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+@media (max-width: 640px) {
+  .player-combobox-field input {
+    font-size: 16px;
+  }
+  .player-combobox-options {
+    max-height: 200px;
+  }
+}

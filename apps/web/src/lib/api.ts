@@ -7,6 +7,7 @@ import type {
   GraphResponse,
   GameScoresResponse,
   PlayerDetailsSnapshot,
+  PlayerSearchResponse,
 } from "../../../../packages/shared/src/index";
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -57,6 +58,28 @@ export const api = {
     request<AnalysisResult>(
       `/runs/${encodeURIComponent(id)}/analysis?${new URLSearchParams({ kind, from, to })}`,
     ),
+  searchPlayers: (
+    id: string,
+    {
+      q,
+      selectedId,
+      excludeId,
+      signal,
+    }: {
+      q: string;
+      selectedId: string;
+      excludeId: string;
+      signal?: AbortSignal;
+    },
+  ) => {
+    const params = new URLSearchParams({ q, limit: "30" });
+    if (selectedId) params.set("selectedId", selectedId);
+    if (excludeId) params.set("excludeId", excludeId);
+    return request<PlayerSearchResponse>(
+      `/runs/${encodeURIComponent(id)}/players?${params}`,
+      { signal },
+    );
+  },
   gameScores: (id: string) =>
     request<GameScoresResponse>(`/runs/${encodeURIComponent(id)}/game-scores`),
   collectGameScores: (id: string, refresh: boolean, maxRequests: number) =>

@@ -50,6 +50,7 @@ import {
 } from "./lib/graph";
 import { Badge, Button, Input, cn } from "./components/ui";
 import { GameScoresPanel } from "./components/GameScoresPanel";
+import { PlayerCombobox } from "./components/PlayerCombobox";
 import {
   ProfileHoverProvider,
   ProfileHoverTrigger,
@@ -197,6 +198,10 @@ export function App() {
       activeRun(query.state.data?.status) ? 2500 : false,
   });
   const run = current.data;
+  useEffect(() => {
+    if (run?.id)
+      void client.invalidateQueries({ queryKey: ["run-players", run.id] });
+  }, [client, run?.id, run?.nodeCount, run?.status]);
   const graphQuery = useQuery({
     queryKey: ["graph", runId, displayLimit, displayDepth],
     queryFn: () =>
@@ -251,6 +256,8 @@ export function App() {
       setAnalysis(null);
       setSelectedId(null);
       setSearch("");
+      setFrom("");
+      setTo("");
     };
     window.addEventListener("popstate", pop);
     return () => window.removeEventListener("popstate", pop);
@@ -355,9 +362,11 @@ export function App() {
     create.error || cancel.error || resume.error || analyze.error;
   const error =
     mutationError || current.error || graphQuery.error || config.error;
-  const searchableNodes = [...merged.nodes].sort((a, b) =>
-    a.name.localeCompare(b.name, "zh-CN"),
-  );
+  const changeFrom = (id: string) => {
+    setFrom(id);
+    setTo((currentTo) => (currentTo === id ? "" : currentTo));
+    setAnalysis(null);
+  };
 
   return (
     <ProfileHoverProvider mode={config.data?.mode ?? run?.mode ?? "live"}>
@@ -1080,8 +1089,7 @@ export function App() {
                             variant="ghost"
                             size="sm"
                             onClick={() => {
-                              setFrom(selected.id);
-                              setAnalysis(null);
+                              changeFrom(selected.id);
                               showAnalysis();
                             }}
                           >
@@ -1239,58 +1247,46 @@ export function App() {
                     <h3>发现彼此的连接</h3>
                     <GitBranch size={15} />
                   </div>
-                  <p>选择两个玩家，查找共同好友或最短连接路径。</p>
-                  <label className="analysis-person">
+                  <p>
+                    按昵称或 Steam ID 搜索两个玩家，查找共同好友或最短连接路径。
+                  </p>
+                  <div className="analysis-person">
                     <span className="person-marker">A</span>
-                    <span>
-                      起点玩家
-                      <select
-                        value={from}
-                        onChange={(event) => {
-                          setFrom(event.target.value);
-                          setAnalysis(null);
-                        }}
-                        disabled={!run}
-                      >
-                        <option value="">选择起点</option>
-                        {searchableNodes.map((node) => (
-                          <option value={node.id} key={node.id}>
-                            {node.name} · {node.id.slice(-6)}
-                          </option>
-                        ))}
-                      </select>
-                    </span>
-                  </label>
+                    <PlayerCombobox
+                      key={`from-${runId ?? "no-run"}`}
+                      label="起点玩家"
+                      runId={run?.id}
+                      value={from}
+                      onChange={changeFrom}
+                      selectedPlayer={merged.nodes.find(
+                        (node) => node.id === from,
+                      )}
+                    />
+                  </div>
                   <span className="person-connector" />
-                  <label className="analysis-person">
+                  <div className="analysis-person">
                     <span className="person-marker secondary">B</span>
-                    <span>
-                      终点玩家
-                      <select
-                        value={to}
-                        onChange={(event) => {
-                          setTo(event.target.value);
-                          setAnalysis(null);
-                        }}
-                        disabled={!run}
-                      >
-                        <option value="">选择终点</option>
-                        {searchableNodes
-                          .filter((node) => node.id !== from)
-                          .map((node) => (
-                            <option value={node.id} key={node.id}>
-                              {node.name} · {node.id.slice(-6)}
-                            </option>
-                          ))}
-                      </select>
-                    </span>
-                  </label>
+                    <PlayerCombobox
+                      key={`to-${runId ?? "no-run"}`}
+                      label="终点玩家"
+                      runId={run?.id}
+                      value={to}
+                      excludeId={from}
+                      onChange={(id) => {
+                        setTo(id);
+                        setAnalysis(null);
+                      }}
+                      selectedPlayer={merged.nodes.find(
+                        (node) => node.id === to,
+                      )}
+                    />
+                  </div>
                   <div className="analysis-buttons">
                     <Button
                       variant="secondary"
                       size="sm"
                       disabled={
-                        !from || !to || from === to || analyze.isPending
+                        !run || !from || !to || from === to || analyze.isPending
                       }
                       onClick={() => analyze.mutate("mutual")}
                     >
@@ -1300,7 +1296,7 @@ export function App() {
                     <Button
                       size="sm"
                       disabled={
-                        !from || !to || from === to || analyze.isPending
+                        !run || !from || !to || from === to || analyze.isPending
                       }
                       onClick={() => analyze.mutate("path")}
                     >

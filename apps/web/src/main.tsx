@@ -5,6 +5,7 @@ import { App } from "./App";
 import "./styles.css";
 import "./game-scores.css";
 import "./profile-hover.css";
+import "./player-combobox.css";
 
 const client = new QueryClient({
   defaultOptions: {

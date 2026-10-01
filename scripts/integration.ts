@@ -5,6 +5,7 @@ import type {
   CrawlRun,
   CreateRunResult,
   GraphResponse,
+  PlayerSearchResponse,
 } from "../packages/shared/src/index.ts";
 
 const base = process.env.TEST_BASE_URL ?? "http://localhost:8080";
@@ -88,6 +89,28 @@ async function main() {
     tiny.edges.every(
       (e) => visibleIds.has(e.source) && visibleIds.has(e.target),
     ),
+  );
+  const outside = graph.nodes.find((node) => !visibleIds.has(node.id))!;
+  const allPlayers = await request<PlayerSearchResponse>(
+    `/runs/${run.id}/players?limit=3`,
+  );
+  assert.equal(allPlayers.total, graph.totalNodes);
+  assert.equal(allPlayers.players.length, 3);
+  const found = await request<PlayerSearchResponse>(
+    `/runs/${run.id}/players?q=${outside.id}&selectedId=${outside.id}`,
+  );
+  assert.equal(found.players[0].id, outside.id);
+  assert.equal(found.selected?.id, outside.id);
+  const excluded = await request<PlayerSearchResponse>(
+    `/runs/${run.id}/players?q=${outside.id}&excludeId=${outside.id}`,
+  );
+  assert.equal(excluded.total, 0);
+  const outsidePath = await request<AnalysisResult>(
+    `/runs/${run.id}/analysis?kind=path&from=${run.rootId}&to=${outside.id}`,
+  );
+  assert.equal(outsidePath.path.at(-1), outside.id);
+  console.log(
+    "PASS: searchable analysis players cover the entire saved run beyond the display cap",
   );
   const reused = await request<CreateRunResult>("/runs", input);
   assert.equal(reused.cached, true);

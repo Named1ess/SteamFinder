@@ -53,6 +53,15 @@ export interface GraphEdge {
   source: string;
   target: string;
 }
+export type PlayerSearchOption = Pick<
+  GraphNode,
+  "id" | "name" | "avatar" | "profileUrl" | "depth"
+>;
+export interface PlayerSearchResponse {
+  players: PlayerSearchOption[];
+  total: number;
+  selected: PlayerSearchOption | null;
+}
 export interface GraphStats {
   layers: { depth: number; count: number }[];
   communities: { id: number; size: number }[];
