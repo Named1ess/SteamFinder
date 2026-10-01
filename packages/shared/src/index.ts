@@ -91,4 +91,68 @@ export interface AnalysisResult {
   complete: boolean;
   message: string;
 }
+export interface GamePlaytime {
+  appId: string;
+  name: string;
+  /** Lifetime minutes shown for this game; null means hidden or unavailable. */
+  minutes: number | null;
+}
+export interface PublicGames {
+  scope: "profile_recent";
+  games: GamePlaytime[];
+}
+export interface GameProfileSnapshot extends PublicGames {
+  playerId: string;
+  status: FetchStatus;
+  fetchedAt: string | null;
+  attemptedAt: string | null;
+  message: string | null;
+}
+export interface GameScoreBreakdown {
+  score: number | null;
+  /** Component percentages, before the 40%/60% weights. */
+  gameOverlap: number | null;
+  timeSimilarity: number | null;
+  sharedGameCount: number;
+  unionGameCount: number;
+  rootGameCount: number;
+  friendGameCount: number;
+  rootMinutes: number | null;
+  friendMinutes: number | null;
+  reason: string | null;
+  sharedGames: {
+    appId: string;
+    name: string;
+    rootMinutes: number | null;
+    friendMinutes: number | null;
+  }[];
+}
+export interface GameScoreRow {
+  player: Pick<GraphNode, "id" | "name" | "avatar" | "profileUrl">;
+  snapshot: GameProfileSnapshot;
+  result: GameScoreBreakdown;
+}
+export interface GameScoreJob {
+  id: string;
+  runId: string;
+  status: RunStatus;
+  maxRequests: number;
+  requestCount: number;
+  cacheHits: number;
+  totalPlayers: number;
+  processedPlayers: number;
+  message: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+export interface GameScoresResponse {
+  runId: string;
+  rootId: string;
+  scope: "profile_recent";
+  formulaVersion: "public-games-v1";
+  root: GameProfileSnapshot | null;
+  job: GameScoreJob | null;
+  rows: GameScoreRow[];
+}
 export const DEFAULT_ROOT = "76561199521553744";

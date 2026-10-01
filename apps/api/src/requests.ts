@@ -14,6 +14,7 @@ export async function steamRequest<T>(
   runId?: string,
   initialBudget?: { used: number; max: number },
   connection?: pg.PoolClient,
+  gameJobId?: string,
 ): Promise<T> {
   for (let attempt = 0; attempt < 3; attempt++) {
     const client = connection ?? (await pool.connect());
@@ -44,6 +45,16 @@ export async function steamRequest<T>(
         if (rows[0].request_count >= rows[0].max_requests)
           throw new BudgetError("请求预算已达到上限，可增加预算后继续");
       }
+      if (gameJobId) {
+        const { rows } = await client.query(
+          "SELECT status,request_count,max_requests FROM game_score_jobs WHERE id=$1 AND mode=$2",
+          [gameJobId, config.mode],
+        );
+        if (!rows[0] || !["running", "queued"].includes(rows[0].status))
+          throw new CancelledError();
+        if (rows[0].request_count >= rows[0].max_requests)
+          throw new BudgetError("游戏资料请求预算已达到上限，可增加预算后继续");
+      }
       await sleep(
         Math.max(
           0,
@@ -60,6 +71,17 @@ export async function steamRequest<T>(
         const reservation = await client.query(
           `UPDATE crawl_runs SET request_count=request_count+1,updated_at=now() WHERE id=$1 AND status IN ('queued','running') AND request_count<max_requests RETURNING id`,
           [runId],
+        );
+        if (!reservation.rows.length) {
+          await client.query("ROLLBACK");
+          inTransaction = false;
+          throw new CancelledError();
+        }
+      }
+      if (gameJobId) {
+        const reservation = await client.query(
+          "UPDATE game_score_jobs SET request_count=request_count+1,updated_at=now() WHERE id=$1 AND mode=$2 AND status IN ('queued','running') AND request_count<max_requests RETURNING id",
+          [gameJobId, config.mode],
         );
         if (!reservation.rows.length) {
           await client.query("ROLLBACK");

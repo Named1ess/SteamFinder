@@ -1,6 +1,8 @@
 import { DEFAULT_ROOT } from "../../../packages/shared/src/index.js";
 import { validSteamId } from "./identity.js";
 import { parseFriendsPage, parseProfilePage } from "./community.js";
+import { parsePublicGames } from "./community-games.js";
+import type { PublicGames } from "../../../packages/shared/src/index.js";
 import { SteamError, classifyStatus } from "./steam-error.js";
 export { SteamError, classifyStatus } from "./steam-error.js";
 
@@ -18,6 +20,7 @@ export interface Provider {
   ): Promise<{ friends: string[]; players: Player[] }>;
   summaries(ids: string[]): Promise<Player[]>;
   vanity(name: string): Promise<string>;
+  games?(id: string): Promise<PublicGames>;
 }
 
 export class PublicWebProvider implements Provider {
@@ -97,6 +100,10 @@ export class PublicWebProvider implements Provider {
     if (!validSteamId(id)) throw new SteamError("invalid", "无效的 Steam ID");
     return parseFriendsPage(await this.get(`profiles/${id}/friends/`), id);
   }
+  async games(id: string): Promise<PublicGames> {
+    if (!validSteamId(id)) throw new SteamError("invalid", "无效的 Steam ID");
+    return parsePublicGames(await this.get(`profiles/${id}/`), id);
+  }
   async friends(id: string): Promise<string[]> {
     return (await this.friendsWithPlayers(id)).friends;
   }
@@ -122,6 +129,31 @@ export const demoIds = [
   ),
 ];
 export class DemoProvider implements Provider {
+  async games(id: string): Promise<PublicGames> {
+    const index = demoIds.indexOf(id);
+    if (index === 12) throw new SteamError("private", "演示：游戏活动未公开");
+    const selections = [
+      { appId: "730", name: "Counter-Strike 2", minutes: 18000 },
+      { appId: "570", name: "Dota 2", minutes: 6000 },
+      { appId: "1172470", name: "Apex Legends", minutes: 12000 },
+      { appId: "1172620", name: "Sea of Thieves", minutes: 1800 },
+      { appId: "440", name: "Team Fortress 2", minutes: 3000 },
+    ];
+    return {
+      scope: "profile_recent",
+      games: Array.from({ length: 3 }, (_, offset) => {
+        const game =
+          selections[(Math.max(index, 0) + offset) % selections.length];
+        return {
+          ...game,
+          minutes:
+            index === 11 && offset === 0
+              ? null
+              : Math.round(game.minutes * (1 + Math.max(index, 0) / 10)),
+        };
+      }),
+    };
+  }
   async vanity(_name: string) {
     return DEFAULT_ROOT;
   }

@@ -1,6 +1,6 @@
 # SteamFinder
 
-基于 TypeScript 的 Steam 好友关系探索工具：按层采集好友、持久化缓存、交互关系图、共同好友和最短连接路径。前端、API、采集 Worker、数据库全部通过 Docker Compose 运行。
+基于 TypeScript 的 Steam 好友关系探索工具：按层采集好友、持久化缓存、交互关系图、共同好友、最短连接路径和游戏相关度评分。前端、API、采集 Worker、数据库全部通过 Docker Compose 运行。
 
 ## 启动
 
@@ -43,6 +43,22 @@ docker compose up -d --force-recreate api worker
 - 点击刷新会重新查询允许范围内的数据；刷新失败保留之前成功的数据和时间戳。
 - 好友关系并非树，重复出现的 SteamID 会合并。SteamID 始终以字符串传输。
 
+## 游戏相关度
+
+在好友图谱下方的“游戏相关度”面板，点击采集按钮，比较查询起点与本次图谱中的直接好友。游戏资料单独缓存；打开面板和历史结果不会访问 Steam。手动刷新才重新采集，达到请求预算后可增加预算继续。
+
+保持免登录、免 API：读取公开主页当前展示的近期游戏及这些游戏的**累计时长**。这通常只是少数游戏，不是完整游戏库，也不是每款游戏最近两周的时长。Steam 的完整游戏列表页若要求登录，本项目不会尝试获取登录后的数据。
+
+评分范围 0–100，按 App ID 匹配游戏：
+
+- 游戏重合度：共同展示的游戏数 ÷ 两人展示游戏的并集数 × 100，占 40%。
+- 时长分布相似度：分别将各游戏累计时长除以本人展示游戏的总时长，再将共同游戏的较小占比相加 × 100，占 60%。
+- 综合分：游戏重合度 × 40% + 时长分布相似度 × 60%，最终保留一位小数。
+
+例如，两人展示相同的两款游戏，时长占比分别为 75%/25% 和 25%/75%，综合分为 70。总时长不同但分布相同，可以得到同样的分数；面板会另外展示时长和游戏样本数。
+
+分数仅代表公开样本中的游戏偏好相似程度，不代表关系亲疏。没有展示的游戏不代表从未玩过。游戏私密、读取失败、时长隐藏、没有游戏样本或总时长为零时显示“无法评分”，不会用零分替代。刷新失败保留旧缓存，但旧数据不会冒充本次有效评分。
+
 ## 服务
 
 | 服务 | 职责 |
@@ -75,8 +91,9 @@ docker compose --profile tools run --rm test npm run typecheck
 docker compose --profile tools run --rm test npm run build
 # 先将 .env 的 STEAM_MODE 显式设为 demo 并重建 api/worker；下面两项验证会创建演示记录：
 docker compose --profile tools run --rm test npm run test:integration
+docker compose --profile tools run --rm test npm run test:games
 # PostgreSQL 集成测试（会创建并清理测试查询）：
-docker compose --profile tools run --rm -e RUN_DATABASE_TESTS=true test npm test -- apps/api/tests/database.test.ts
+docker compose --profile tools run --rm -e RUN_DATABASE_TESTS=true test npm test
 # Windows / PowerShell：打断正在运行的演示任务并重建容器，验证恢复和数据卷
 ./scripts/verify-restart.ps1
 ```
@@ -85,9 +102,11 @@ tools 中的 test 服务固定使用 `STEAM_MODE=demo`，保证其直接运行�
 
 集成验证覆盖数据库持久图、环与去重、共同好友、路径、私密/边界状态、显示截断、重复查询不新增调用、预算限制及继续采集。公开网页采集的实际联通性与结构兼容性需单独验证，不依赖任何凭据。
 
-公开网页版本验证：34 项测试通过（包含真实 PostgreSQL 集成测试），TypeScript 检查、Docker 生产构建和 HTTP 集成验证通过。模拟 500 好友场景验证两次网页请求即可保存起点资料、全部好友及其资料，并验证精确请求预算和继续采集。
+公开网页与游戏评分版本验证：58 项测试通过（包含真实 PostgreSQL 集成测试），TypeScript 检查、Docker 生产构建和两组 HTTP 集成验证通过。模拟 500 好友场景验证两次网页请求即可保存起点资料、全部好友及其资料，并验证精确请求预算和继续采集。游戏验证覆盖评分公式、隐藏时长、失败后保留旧样本、模式隔离、预算续采和只读取缓存。
 
 使用示例主页进行了匿名真实两层采集，当次得到 469 个节点、499 条已知关系，重复查询复用缓存；浏览器检查无控制台错误。实际结果会随好友变更和隐私设置变化。上述验证不代表万节点图谱的性能保证。
+
+同一主页的游戏采集使用 17 次公开主页请求，覆盖起点和 16 位直接好友：8 位可评分、8 位公开游戏样本不可访问，最高分 77.3。重新打开页面及点击使用缓存后请求数仍为 17。桌面和 390px 移动端页面已检查，分数、共同游戏时长、不可评分原因及计算说明均可查看。
 
 ## 项目结构
 

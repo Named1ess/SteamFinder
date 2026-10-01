@@ -7,6 +7,7 @@ import {
   uuid,
   primaryKey,
   date,
+  jsonb,
 } from "drizzle-orm/pg-core";
 const time = (name: string) => timestamp(name, { withTimezone: true });
 export const players = pgTable(
@@ -121,4 +122,52 @@ export const vanityResolutions = pgTable(
     resolvedAt: time("resolved_at").notNull().defaultNow(),
   },
   (t) => [primaryKey({ columns: [t.mode, t.vanity] })],
+);
+export const gameProfiles = pgTable(
+  "game_profiles",
+  {
+    mode: text("mode").notNull(),
+    playerId: text("player_id").notNull(),
+    status: text("status").notNull().default("unknown"),
+    scope: text("scope").notNull().default("profile_recent"),
+    games: jsonb("games").notNull().default([]),
+    fetchedAt: time("fetched_at"),
+    attemptedAt: time("attempted_at"),
+    message: text("message"),
+  },
+  (t) => [primaryKey({ columns: [t.mode, t.playerId] })],
+);
+export const gameScoreJobs = pgTable("game_score_jobs", {
+  id: uuid("id").primaryKey(),
+  runId: uuid("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  mode: text("mode").notNull(),
+  rootId: text("root_id").notNull(),
+  status: text("status").notNull().default("queued"),
+  refresh: boolean("refresh").notNull().default(false),
+  maxRequests: integer("max_requests").notNull(),
+  requestCount: integer("request_count").notNull().default(0),
+  cacheHits: integer("cache_hits").notNull().default(0),
+  message: text("message"),
+  createdAt: time("created_at").notNull().defaultNow(),
+  updatedAt: time("updated_at").notNull().defaultNow(),
+  completedAt: time("completed_at"),
+});
+export const gameScorePlayers = pgTable(
+  "game_score_players",
+  {
+    jobId: uuid("job_id").notNull().references(() => gameScoreJobs.id, { onDelete: "cascade" }),
+    playerId: text("player_id").notNull(),
+    isRoot: boolean("is_root").notNull().default(false),
+    name: text("name").notNull(),
+    avatar: text("avatar"),
+    profileUrl: text("profile_url").notNull(),
+    processed: boolean("processed").notNull().default(false),
+    status: text("status").notNull().default("unknown"),
+    scope: text("scope").notNull().default("profile_recent"),
+    games: jsonb("games").notNull().default([]),
+    fetchedAt: time("fetched_at"),
+    attemptedAt: time("attempted_at"),
+    message: text("message"),
+  },
+  (t) => [primaryKey({ columns: [t.jobId, t.playerId] })],
 );

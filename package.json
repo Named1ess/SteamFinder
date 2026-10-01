@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit",
     "build": "vite build --config apps/web/vite.config.ts",
     "test": "vitest run",
-    "test:integration": "tsx scripts/integration.ts"
+    "test:integration": "tsx scripts/integration.ts",
+    "test:games": "tsx scripts/game-scores-integration.ts"
   },
   "dependencies": {
     "@antv/g6": "^5.0.49",

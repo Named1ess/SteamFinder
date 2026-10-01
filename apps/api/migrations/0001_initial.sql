@@ -60,3 +60,28 @@ CREATE TABLE IF NOT EXISTS vanity_resolutions (
   mode text NOT NULL, vanity text NOT NULL, player_id text NOT NULL,
   resolved_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(mode,vanity)
 );
+CREATE TABLE IF NOT EXISTS game_profiles (
+  mode text NOT NULL, player_id text NOT NULL, status text NOT NULL DEFAULT 'unknown',
+  scope text NOT NULL DEFAULT 'profile_recent', games jsonb NOT NULL DEFAULT '[]',
+  fetched_at timestamptz, attempted_at timestamptz, message text,
+  PRIMARY KEY(mode,player_id)
+);
+CREATE TABLE IF NOT EXISTS game_score_jobs (
+  id uuid PRIMARY KEY, run_id uuid NOT NULL REFERENCES crawl_runs(id) ON DELETE CASCADE,
+  mode text NOT NULL, root_id text NOT NULL, status text NOT NULL DEFAULT 'queued',
+  refresh boolean NOT NULL DEFAULT false, max_requests integer NOT NULL,
+  request_count integer NOT NULL DEFAULT 0, cache_hits integer NOT NULL DEFAULT 0,
+  message text, created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(), completed_at timestamptz
+);
+CREATE TABLE IF NOT EXISTS game_score_players (
+  job_id uuid NOT NULL REFERENCES game_score_jobs(id) ON DELETE CASCADE,
+  player_id text NOT NULL, is_root boolean NOT NULL DEFAULT false,
+  name text NOT NULL, avatar text, profile_url text NOT NULL,
+  processed boolean NOT NULL DEFAULT false, status text NOT NULL DEFAULT 'unknown',
+  scope text NOT NULL DEFAULT 'profile_recent', games jsonb NOT NULL DEFAULT '[]',
+  fetched_at timestamptz, attempted_at timestamptz, message text,
+  PRIMARY KEY(job_id,player_id)
+);
+CREATE INDEX IF NOT EXISTS game_job_history ON game_score_jobs(mode,run_id,created_at DESC);
+CREATE INDEX IF NOT EXISTS game_job_pending ON game_score_players(job_id,processed,is_root);

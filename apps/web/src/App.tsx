@@ -49,6 +49,7 @@ import {
   statusText,
 } from "./lib/graph";
 import { Badge, Button, Input, cn } from "./components/ui";
+import { GameScoresPanel } from "./components/GameScoresPanel";
 
 const NetworkGraph = lazy(() => import("./components/NetworkGraph"));
 const OverviewChart = lazy(() => import("./components/OverviewChart"));
@@ -1362,6 +1363,7 @@ export function App() {
             </div>
           </aside>
         </div>
+        <GameScoresPanel key={run?.id ?? "no-run"} run={run} />
         <footer className="workspace-footer">
           <span>
             STEAMFINDER <i /> 让关系可见

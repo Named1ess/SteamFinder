@@ -5,6 +5,7 @@ import type {
   CreateRunInput,
   CreateRunResult,
   GraphResponse,
+  GameScoresResponse,
 } from "../../../../packages/shared/src/index";
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -43,4 +44,11 @@ export const api = {
     request<AnalysisResult>(
       `/runs/${encodeURIComponent(id)}/analysis?${new URLSearchParams({ kind, from, to })}`,
     ),
+  gameScores: (id: string) =>
+    request<GameScoresResponse>(`/runs/${encodeURIComponent(id)}/game-scores`),
+  collectGameScores: (id: string, refresh: boolean, maxRequests: number) =>
+    request<GameScoresResponse>(`/runs/${encodeURIComponent(id)}/game-scores`, {
+      method: "POST",
+      body: JSON.stringify({ refresh, maxRequests }),
+    }),
 };

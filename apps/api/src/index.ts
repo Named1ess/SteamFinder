@@ -11,8 +11,9 @@ import {
   HttpError,
 } from "./repository.js";
 import { graphResponse, analyze } from "./graph.js";
-import { boss, startQueue, enqueue } from "./queue.js";
+import { boss, startQueue, enqueue, enqueueGameScores } from "./queue.js";
 import { createSearch } from "./search.js";
+import { getGameScores, startGameScoreJob } from "./game-scores.js";
 const app = Fastify({ logger: false, bodyLimit: 8192 });
 const provider =
   config.mode === "demo" ? new DemoProvider() : new PublicWebProvider();
@@ -74,6 +75,20 @@ app.post("/api/runs", async (request) => {
   return result;
 });
 app.get("/api/runs/:id", async (request) => getRun(idFrom(request)));
+app.get("/api/runs/:id/game-scores", async (request) => getGameScores(idFrom(request)));
+app.post("/api/runs/:id/game-scores", async (request) => {
+  const id = idFrom(request);
+  const options = parse(
+    z.object({
+      refresh: z.boolean().optional(),
+      maxRequests: z.number().int().min(1).max(10000).default(2000),
+    }).strict(),
+    request.body ?? {},
+  );
+  const submission = await startGameScoreJob(id, options);
+  if (submission.enqueue) await enqueueGameScores(submission.jobId);
+  return getGameScores(id);
+});
 app.get("/api/runs/:id/graph", async (request) => {
   const id = idFrom(request);
   const query = parse(

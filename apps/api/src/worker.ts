@@ -2,7 +2,8 @@ import { pool } from "./db.js";
 import { config } from "./config.js";
 import { DemoProvider, PublicWebProvider } from "./provider.js";
 import { crawl } from "./crawler.js";
-import { boss, startQueue, enqueue, QUEUE } from "./queue.js";
+import { boss, startQueue, enqueue, QUEUE, GAME_QUEUE, enqueueGameScores } from "./queue.js";
+import { collectGameScores, recoverGameScoreJobs } from "./game-scores.js";
 const provider =
   config.mode === "demo" ? new DemoProvider() : new PublicWebProvider();
 await startQueue();
@@ -12,11 +13,19 @@ const recover = await pool.query(
   [config.mode],
 );
 for (const row of recover.rows) await enqueue(row.id);
+for (const id of await recoverGameScoreJobs()) await enqueueGameScores(id);
 await boss.work<{ id: string }>(
   QUEUE,
   { pollingIntervalSeconds: 0.5, batchSize: 1 },
   async (jobs) => {
     for (const job of jobs) await crawl(job.data.id, provider);
+  },
+);
+await boss.work<{ id: string }>(
+  GAME_QUEUE,
+  { pollingIntervalSeconds: 0.5, batchSize: 1 },
+  async (jobs) => {
+    for (const job of jobs) await collectGameScores(job.data.id, provider);
   },
 );
 console.log(`SteamFinder worker ready (${config.mode})`);
