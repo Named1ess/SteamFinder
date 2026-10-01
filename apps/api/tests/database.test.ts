@@ -441,3 +441,186 @@ databaseIt(
     }
   },
 );
+databaseIt(
+  "collects 500 public-page friends with two counted HTML calls and resumes an exact one-call budget",
+  async () => {
+    const ids = Array.from({ length: 501 }, (_, i) =>
+      String(76561200100005000n + BigInt(i)),
+    );
+    const players = ids.map((id, i) => ({
+      id,
+      name: `Public page fixture ${i}`,
+      avatar: `https://avatars.akamai.steamstatic.com/${i}.jpg`,
+      profileUrl: `https://steamcommunity.com/profiles/${id}`,
+    }));
+    const profileCalls: string[][] = [];
+    const friendPageCalls: string[] = [];
+    let fallbackCalls = 0;
+    const provider: Provider & {
+      summaryBatchSize: number;
+      friendsWithPlayers(id: string): Promise<{
+        friends: string[];
+        players: typeof players;
+      }>;
+    } = {
+      summaryBatchSize: 1,
+      vanity: async () => ids[0],
+      summaries: async (batch) => {
+        profileCalls.push(batch);
+        if (batch.length !== 1)
+          throw new Error("A public profile fetch must contain one ID");
+        return players.filter((player) => batch.includes(player.id));
+      },
+      friends: async () => {
+        fallbackCalls++;
+        return ids.slice(1);
+      },
+      friendsWithPlayers: async (id) => {
+        friendPageCalls.push(id);
+        return { friends: ids.slice(1), players: players.slice(1) };
+      },
+    };
+    const runs: string[] = [];
+    try {
+      const first = await createRun(ids[0], {
+        input: ids[0],
+        depth: 1,
+        maxNodes: 1000,
+        maxRequests: 2,
+        refresh: true,
+      });
+      runs.push(first.run.id);
+      await crawl(first.run.id, provider);
+      expect(await getRun(first.run.id)).toMatchObject({
+        status: "completed",
+        nodeCount: 501,
+        edgeCount: 500,
+        requestCount: 2,
+      });
+      expect(profileCalls).toEqual([[ids[0]]]);
+      expect(friendPageCalls).toEqual([ids[0]]);
+      expect(fallbackCalls).toBe(0);
+      const metadata = await pool.query(
+        "SELECT count(*)::int count FROM players WHERE mode=$1 AND id=ANY($2::text[]) AND summary_at IS NOT NULL AND name LIKE 'Public page fixture %'",
+        [config.mode, ids],
+      );
+      expect(metadata.rows[0].count).toBe(501);
+
+      const capped = await createRun(ids[0], {
+        input: ids[0],
+        depth: 1,
+        maxNodes: 1000,
+        maxRequests: 1,
+        refresh: true,
+      });
+      runs.push(capped.run.id);
+      await crawl(capped.run.id, provider);
+      expect(await getRun(capped.run.id)).toMatchObject({
+        status: "limited",
+        nodeCount: 1,
+        requestCount: 1,
+      });
+      await pool.query(
+        "UPDATE crawl_runs SET status='queued',max_requests=2 WHERE id=$1",
+        [capped.run.id],
+      );
+      await crawl(capped.run.id, provider);
+      expect(await getRun(capped.run.id)).toMatchObject({
+        status: "completed",
+        nodeCount: 501,
+        requestCount: 2,
+      });
+      expect(profileCalls).toEqual([[ids[0]], [ids[0]]]);
+      expect(friendPageCalls).toEqual([ids[0], ids[0]]);
+      expect(fallbackCalls).toBe(0);
+    } finally {
+      await pool.query("DELETE FROM crawl_runs WHERE id=ANY($1::uuid[])", [runs]);
+      await pool.query(
+        "DELETE FROM friend_observations WHERE mode=$1 AND owner_id=$2",
+        [config.mode, ids[0]],
+      );
+      await pool.query(
+        "DELETE FROM friendship_edges WHERE mode=$1 AND (source=$2 OR target=$2)",
+        [config.mode, ids[0]],
+      );
+      await pool.query(
+        "DELETE FROM friend_lists WHERE mode=$1 AND owner_id=$2",
+        [config.mode, ids[0]],
+      );
+      await pool.query("DELETE FROM players WHERE mode=$1 AND id=ANY($2::text[])", [
+        config.mode,
+        ids,
+      ]);
+    }
+  },
+);
+databaseIt(
+  "hydrates missing public metadata one profile per counted request across budget resume",
+  async () => {
+    const ids = Array.from({ length: 4 }, (_, i) =>
+      String(76561200100006000n + BigInt(i)),
+    );
+    const profileCalls: string[][] = [];
+    const provider: Provider & { summaryBatchSize: number } = {
+      summaryBatchSize: 1,
+      vanity: async () => ids[0],
+      friends: async () => ids.slice(1),
+      summaries: async (batch) => {
+        profileCalls.push(batch);
+        if (batch.length !== 1)
+          throw new Error("Public profile pages require one request per ID");
+        return batch.map((id) => ({
+          id,
+          name: "Individual public profile fixture",
+          avatar: null,
+          profileUrl: `https://steamcommunity.com/profiles/${id}`,
+        }));
+      },
+    };
+    const run = await createRun(ids[0], {
+      input: ids[0],
+      depth: 1,
+      maxNodes: 10,
+      maxRequests: 3,
+      refresh: true,
+    });
+    try {
+      await crawl(run.run.id, provider);
+      expect(await getRun(run.run.id)).toMatchObject({
+        status: "limited",
+        nodeCount: 4,
+        requestCount: 3,
+      });
+      expect(profileCalls).toEqual([[ids[0]], [ids[1]]]);
+      await pool.query(
+        "UPDATE crawl_runs SET status='queued',max_requests=5 WHERE id=$1",
+        [run.run.id],
+      );
+      await crawl(run.run.id, provider);
+      expect(await getRun(run.run.id)).toMatchObject({
+        status: "completed",
+        nodeCount: 4,
+        requestCount: 5,
+      });
+      expect(profileCalls).toEqual(ids.map((id) => [id]));
+    } finally {
+      await pool.query("DELETE FROM crawl_runs WHERE id=$1", [run.run.id]);
+      await pool.query(
+        "DELETE FROM friend_observations WHERE mode=$1 AND owner_id=$2",
+        [config.mode, ids[0]],
+      );
+      await pool.query(
+        "DELETE FROM friendship_edges WHERE mode=$1 AND (source=$2 OR target=$2)",
+        [config.mode, ids[0]],
+      );
+      await pool.query(
+        "DELETE FROM friend_lists WHERE mode=$1 AND owner_id=$2",
+        [config.mode, ids[0]],
+      );
+      await pool.query("DELETE FROM players WHERE mode=$1 AND id=ANY($2::text[])", [
+        config.mode,
+        ids,
+      ]);
+    }
+  },
+);

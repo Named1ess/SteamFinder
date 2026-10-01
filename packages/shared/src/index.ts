@@ -9,7 +9,6 @@ export type RunStatus =
 export type FetchStatus = "unknown" | "ok" | "private" | "error";
 export interface AppConfig {
   mode: DataMode;
-  hasApiKey: boolean;
   maxDepth: number;
   maxNodes: number;
   defaultRoot: string;

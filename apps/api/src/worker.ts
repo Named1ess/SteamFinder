@@ -1,10 +1,10 @@
 import { pool } from "./db.js";
 import { config } from "./config.js";
-import { DemoProvider, LiveProvider } from "./provider.js";
+import { DemoProvider, PublicWebProvider } from "./provider.js";
 import { crawl } from "./crawler.js";
 import { boss, startQueue, enqueue, QUEUE } from "./queue.js";
 const provider =
-  config.mode === "demo" ? new DemoProvider() : new LiveProvider(config.apiKey);
+  config.mode === "demo" ? new DemoProvider() : new PublicWebProvider();
 await startQueue();
 // A process that died between DB progress and job acknowledgement is safe to replay.
 const recover = await pool.query(

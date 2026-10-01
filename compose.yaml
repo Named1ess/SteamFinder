@@ -11,11 +11,10 @@ x-backend: &backend
     PGUSER: steamfinder
     PGPASSWORD: ${POSTGRES_PASSWORD:-steamfinder}
     PGDATABASE: steamfinder
-    STEAM_MODE: ${STEAM_MODE:-demo}
-    STEAM_API_KEY: ${STEAM_API_KEY:-}
+    STEAM_MODE: ${STEAM_MODE:-live}
     API_PORT: 3001
-    STEAM_REQUEST_DELAY_MS: ${STEAM_REQUEST_DELAY_MS:-350}
-    DAILY_REQUEST_LIMIT: ${DAILY_REQUEST_LIMIT:-90000}
+    STEAM_REQUEST_DELAY_MS: ${STEAM_REQUEST_DELAY_MS:-2000}
+    DAILY_REQUEST_LIMIT: ${DAILY_REQUEST_LIMIT:-10000}
     NODE_ENV: production
   init: true
 
@@ -94,6 +93,7 @@ services:
     profiles: ["tools"]
     environment:
       <<: *backend-env
+      STEAM_MODE: demo
       TEST_BASE_URL: http://web
     command: ["npm", "test"]
 

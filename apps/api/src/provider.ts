@@ -1,5 +1,8 @@
 import { DEFAULT_ROOT } from "../../../packages/shared/src/index.js";
 import { validSteamId } from "./identity.js";
+import { parseFriendsPage, parseProfilePage } from "./community.js";
+import { SteamError, classifyStatus } from "./steam-error.js";
+export { SteamError, classifyStatus } from "./steam-error.js";
 
 export interface Player {
   id: string;
@@ -8,96 +11,108 @@ export interface Player {
   profileUrl: string;
 }
 export interface Provider {
+  readonly summaryBatchSize?: number;
   friends(id: string): Promise<string[]>;
+  friendsWithPlayers?(
+    id: string,
+  ): Promise<{ friends: string[]; players: Player[] }>;
   summaries(ids: string[]): Promise<Player[]>;
   vanity(name: string): Promise<string>;
 }
-export class SteamError extends Error {
-  constructor(
-    public kind: "private" | "unauthorized" | "rate" | "transient" | "invalid",
-    message: string,
-  ) {
-    super(message);
+
+export class PublicWebProvider implements Provider {
+  readonly summaryBatchSize = 1;
+  private async get(path: string): Promise<string> {
+    const url = `https://steamcommunity.com/${path}?l=english`;
+    const maxBytes = 8 * 1024 * 1024;
+    try {
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(20000),
+        redirect: "manual",
+        headers: {
+          "user-agent":
+            "SteamFinder/0.1 (public Steam Community profile explorer)",
+          accept: "text/html",
+          "accept-language": "en-US,en;q=0.9",
+        },
+      });
+      if (!response.ok) {
+        await response.body?.cancel();
+        const friendPage = /^profiles\/(\d{17})\/friends\/$/.exec(path);
+        const location = response.headers.get("location");
+        // Hidden friend lists can redirect to the same player's profile. Mark
+        // that list unavailable without following another unbudgeted request.
+        if (
+          friendPage &&
+          location &&
+          [301, 302, 303, 307, 308].includes(response.status)
+        ) {
+          let target: string | undefined;
+          try {
+            target = new URL(location, url).href.replace(/\/$/, "");
+          } catch {}
+          if (target === `https://steamcommunity.com/profiles/${friendPage[1]}`)
+            throw new SteamError(
+              "private",
+              "好友页不可访问，Steam 已跳转至个人资料页",
+            );
+        }
+        throw classifyStatus(response.status);
+      }
+      if (
+        !response.headers
+          .get("content-type")
+          ?.toLowerCase()
+          .includes("text/html")
+      ) {
+        await response.body?.cancel();
+        throw new SteamError("invalid", "Steam 返回的内容不是公开网页");
+      }
+      if (Number(response.headers.get("content-length")) > maxBytes) {
+        await response.body?.cancel();
+        throw new SteamError("invalid", "Steam 网页过大，未保存不完整结果");
+      }
+      if (!response.body)
+        throw new SteamError("invalid", "Steam 返回了空白网页");
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let size = 0;
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > maxBytes) {
+          await reader.cancel();
+          throw new SteamError("invalid", "Steam 网页过大，未保存不完整结果");
+        }
+        chunks.push(value);
+      }
+      return Buffer.concat(chunks).toString("utf8");
+    } catch (error) {
+      if (error instanceof SteamError) throw error;
+      throw new SteamError("transient", "Steam 公开网页网络请求失败");
+    }
   }
-}
-export function classifyStatus(status: number): SteamError {
-  if (status === 401 || status === 403)
-    return new SteamError(
-      "unauthorized",
-      "Steam 拒绝授权，请检查服务器 API 密钥",
-    );
-  if (status === 429) return new SteamError("rate", "Steam 请求频率超限");
-  if (status >= 500) return new SteamError("transient", "Steam 服务暂时不可用");
-  return new SteamError("invalid", "Steam 返回无效响应");
-}
-export class LiveProvider implements Provider {
-  constructor(private key: string) {}
-  private async get(
-    path: string,
-    params: Record<string, string>,
-    friendList = false,
-  ): Promise<any> {
-    const url = new URL(`https://api.steampowered.com/${path}`);
-    url.search = new URLSearchParams({ key: this.key, ...params }).toString();
-    let response: Response;
-    try {
-      response = await fetch(url, { signal: AbortSignal.timeout(15000) });
-    } catch {
-      throw new SteamError("transient", "Steam 网络请求失败");
-    }
-    // GetFriendList returns 401 for unavailable/private friend lists. It cannot prove an empty list.
-    if (friendList && response.status === 401)
-      throw new SteamError("private", "好友列表未公开");
-    if (!response.ok) throw classifyStatus(response.status);
-    try {
-      return await response.json();
-    } catch {
-      throw new SteamError("invalid", "Steam 响应格式无效");
-    }
+  async friendsWithPlayers(id: string) {
+    if (!validSteamId(id)) throw new SteamError("invalid", "无效的 Steam ID");
+    return parseFriendsPage(await this.get(`profiles/${id}/friends/`), id);
   }
   async friends(id: string): Promise<string[]> {
-    const body = await this.get(
-      "ISteamUser/GetFriendList/v1/",
-      { steamid: id, relationship: "friend" },
-      true,
-    );
-    if (!Array.isArray(body.friendslist?.friends))
-      throw new SteamError("private", "好友列表未公开");
-    const ids = body.friendslist.friends.map((item: any) => item.steamid);
-    if (ids.some((id: unknown) => !validSteamId(id)))
-      throw new SteamError("invalid", "Steam 好友数据无效");
-    return [...new Set<string>(ids)].sort();
+    return (await this.friendsWithPlayers(id)).friends;
   }
   async summaries(ids: string[]): Promise<Player[]> {
-    if (ids.length > 100)
-      throw new Error("Summary batches must contain at most 100 IDs");
-    const body = await this.get("ISteamUser/GetPlayerSummaries/v2/", {
-      steamids: ids.join(","),
-    });
-    if (!Array.isArray(body.response?.players))
-      throw new SteamError("invalid", "Steam 资料数据无效");
-    return body.response.players
-      .filter(
-        (p: any) => typeof p.steamid === "string" && ids.includes(p.steamid),
-      )
-      .map((p: any) => ({
-        id: p.steamid,
-        name: String(p.personaname ?? p.steamid).slice(0, 200),
-        avatar:
-          typeof p.avatarfull === "string" &&
-          p.avatarfull.startsWith("https://")
-            ? p.avatarfull
-            : null,
-        profileUrl: `https://steamcommunity.com/profiles/${p.steamid}`,
-      }));
+    if (ids.length !== 1 || !validSteamId(ids[0]))
+      throw new SteamError(
+        "invalid",
+        "每次公开资料网页请求仅支持一个有效 Steam ID",
+      );
+    return [parseProfilePage(await this.get(`profiles/${ids[0]}/`), ids[0])];
   }
   async vanity(name: string): Promise<string> {
-    const body = await this.get("ISteamUser/ResolveVanityURL/v1/", {
-      vanityurl: name,
-    });
-    if (body.response?.success !== 1 || !validSteamId(body.response.steamid))
-      throw new SteamError("invalid", "找不到该 Steam 用户");
-    return body.response.steamid;
+    if (!/^[A-Za-z0-9_-]+$/.test(name) || name.length > 200)
+      throw new SteamError("invalid", "无效的 Steam 自定义主页地址");
+    return parseProfilePage(await this.get(`id/${encodeURIComponent(name)}/`))
+      .id;
   }
 }
 export const demoIds = [

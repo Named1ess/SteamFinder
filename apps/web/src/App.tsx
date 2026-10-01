@@ -141,8 +141,8 @@ function EmptyNetwork({
       </Button>
       <span className="empty-note">
         {demo
-          ? "使用本地生成的示例数据 · 无需 Steam API Key"
-          : "点击后将发起采集 · 也可使用左侧自定义查询"}
+          ? "使用本地生成的示例数据 · 不访问 Steam"
+          : "点击后采集 Steam 公开网页 · 无需登录或密钥"}
       </span>
     </div>
   );
@@ -223,7 +223,6 @@ export function App() {
   );
   const demo = (run?.mode ?? config.data?.mode) === "demo";
   const busy = activeRun(run?.status);
-  const missingKey = config.data?.mode === "live" && !config.data.hasApiKey;
   const selectRun = (next: CrawlRun) => {
     const url = new URL(window.location.href);
     url.searchParams.set("run", next.id);
@@ -453,7 +452,7 @@ export function App() {
           <Button
             className="query-submit"
             type="submit"
-            disabled={create.isPending || !config.data || missingKey}
+            disabled={create.isPending || !config.data}
           >
             {create.isPending ? (
               <LoaderCircle className="spin" size={15} />
@@ -548,7 +547,7 @@ export function App() {
                 ? "连接中"
                 : demo
                   ? "演示模式"
-                  : "Steam 实时数据"}
+                  : "公开网页采集"}
             </Badge>
             <span className="header-local">LOCAL</span>
           </div>
@@ -565,15 +564,6 @@ export function App() {
             <Network size={33} strokeWidth={1.2} />
           </span>
         </div>
-        {missingKey && (
-          <div className="notice notice-warning" role="alert">
-            <LockKeyhole size={16} />
-            <span>
-              尚未配置 Steam API
-              Key。请在服务端配置密钥后重启服务，或切换到演示模式。
-            </span>
-          </div>
-        )}
         {demo && (
           <div className="demo-banner">
             <Sparkles size={14} />
@@ -690,7 +680,7 @@ export function App() {
                     <Button
                       variant="secondary"
                       size="sm"
-                      disabled={create.isPending || missingKey}
+                      disabled={create.isPending}
                       onClick={() =>
                         create.mutate({
                           input: run.rootId,
@@ -809,7 +799,7 @@ export function App() {
                     onStart={startExample}
                     pending={create.isPending}
                     demo={demo}
-                    blocked={!config.data || !!missingKey}
+                    blocked={!config.data}
                   />
                 )
               ) : graphQuery.isLoading ? (
@@ -968,7 +958,7 @@ export function App() {
                     <Button
                       size="sm"
                       type="submit"
-                      disabled={resume.isPending || missingKey}
+                      disabled={resume.isPending}
                     >
                       {resume.isPending ? (
                         <LoaderCircle className="spin" size={13} />

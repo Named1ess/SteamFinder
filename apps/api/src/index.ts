@@ -2,7 +2,7 @@ import Fastify from "fastify";
 import { z } from "zod";
 import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
-import { DemoProvider, LiveProvider, SteamError } from "./provider.js";
+import { DemoProvider, PublicWebProvider, SteamError } from "./provider.js";
 import { BudgetError } from "./requests.js";
 import {
   getRun,
@@ -15,7 +15,7 @@ import { boss, startQueue, enqueue } from "./queue.js";
 import { createSearch } from "./search.js";
 const app = Fastify({ logger: false, bodyLimit: 8192 });
 const provider =
-  config.mode === "demo" ? new DemoProvider() : new LiveProvider(config.apiKey);
+  config.mode === "demo" ? new DemoProvider() : new PublicWebProvider();
 const createSchema = z
   .object({
     input: z.string().min(1).max(300),
@@ -61,7 +61,6 @@ app.get("/api/health", async () => {
 });
 app.get("/api/config", async () => ({
   mode: config.mode,
-  hasApiKey: !!config.apiKey,
   maxDepth: 3,
   maxNodes: 10000,
   defaultRoot: config.defaultRoot,
@@ -128,8 +127,6 @@ app.post("/api/runs/:id/resume", async (request) => {
   const id = idFrom(request),
     old = await getRun(id),
     input = parse(resumeSchema, request.body ?? {});
-  if (config.mode === "live" && !config.apiKey)
-    throw new HttpError(503, "请先在服务器设置 Steam API 密钥");
   const maxNodes = input.maxNodes ?? old.maxNodes,
     maxRequests = input.maxRequests ?? old.maxRequests;
   if (maxNodes < old.nodeCount || maxRequests < old.requestCount)

@@ -25,20 +25,30 @@ export async function crawl(id: string, provider: Provider): Promise<void> {
     while (true) {
       const run = await getRun(id);
       if (run.status !== "running") return;
-      // Hydrate all admitted players, including the final depth boundary, in <=100 batches.
+      // Reuse metadata observed during this run's friend-page fetch. Public profile
+      // pages accept one ID per request; demo providers retain 100-ID batches.
       const hydration = await pool.query(
-        `SELECT n.player_id,p.summary_at FROM run_nodes n JOIN players p ON p.mode=$2 AND p.id=n.player_id WHERE n.run_id=$1 AND NOT n.hydrated ORDER BY n.depth,n.player_id LIMIT 100`,
+        `SELECT n.player_id,p.summary_at,p.summary_at>=r.created_at fresh FROM run_nodes n JOIN crawl_runs r ON r.id=n.run_id JOIN players p ON p.mode=$2 AND p.id=n.player_id WHERE n.run_id=$1 AND NOT n.hydrated ORDER BY n.depth,n.player_id LIMIT 100`,
         [id, config.mode],
       );
       if (hydration.rows.length) {
-        const needed = hydration.rows
-          .filter((r) => !r.summary_at || run.refresh)
+        const missing = hydration.rows.filter(
+          (r) => !r.summary_at || (run.refresh && !r.fresh),
+        );
+        const needed = missing
+          .slice(0, provider.summaryBatchSize ?? 100)
+          .map((r) => r.player_id);
+        const postponed = new Set(
+          missing.slice(needed.length).map((r) => r.player_id),
+        );
+        const hydratedIds = hydration.rows
+          .filter((r) => !postponed.has(r.player_id))
           .map((r) => r.player_id);
         if (needed.length) {
           try {
             await putPlayers(
               await steamRequest(() => provider.summaries(needed), id),
-              { runId: id, ids: hydration.rows.map((r) => r.player_id) },
+              { runId: id, ids: hydratedIds },
             );
           } catch (error) {
             if (error instanceof BudgetError || error instanceof CancelledError)
@@ -53,7 +63,7 @@ export async function crawl(id: string, provider: Provider): Promise<void> {
         }
         await pool.query(
           "UPDATE run_nodes SET hydrated=true WHERE run_id=$1 AND player_id=ANY($2::text[])",
-          [id, hydration.rows.map((r) => r.player_id)],
+          [id, hydratedIds],
         );
         continue;
       }
@@ -76,11 +86,18 @@ export async function crawl(id: string, provider: Provider): Promise<void> {
           await captureList(id, node.player_id);
         } else {
           try {
-            await saveList(
-              node.player_id,
-              await steamRequest(() => provider.friends(node.player_id), id),
+            const result = await steamRequest(
+              async () =>
+                provider.friendsWithPlayers
+                  ? provider.friendsWithPlayers(node.player_id)
+                  : {
+                      friends: await provider.friends(node.player_id),
+                      players: [],
+                    },
               id,
             );
+            if (result.players.length) await putPlayers(result.players);
+            await saveList(node.player_id, result.friends, id);
           } catch (error) {
             if (error instanceof BudgetError || error instanceof CancelledError)
               throw error;

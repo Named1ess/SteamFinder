@@ -51,8 +51,6 @@ async function resolveVanity(
 }
 
 export async function createSearch(input: CreateRunInput, provider: Provider) {
-  if (config.mode === "live" && !config.apiKey)
-    throw new HttpError(503, "请先在服务器设置 Steam API 密钥");
   let identity;
   try {
     identity = parseIdentity(input.input);
