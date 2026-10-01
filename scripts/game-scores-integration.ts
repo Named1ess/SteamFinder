@@ -5,6 +5,7 @@ import type {
   CrawlRun,
   GameScoresResponse,
   GraphResponse,
+  PlayerDetailsSnapshot,
 } from "../packages/shared/src/index.ts";
 
 const base = process.env.TEST_BASE_URL ?? "http://localhost:8080";
@@ -68,6 +69,9 @@ const complete = await settle(
 assert.equal(complete.job!.id, limited.job!.id);
 assert.equal(complete.job!.status, "completed");
 assert.equal(complete.scope, "profile_recent");
+assert.equal(complete.formulaVersion, "public-games-location-v2");
+assert.ok(complete.rows.some((r) => r.result.locationWeight === 5));
+assert.ok(complete.rows.some((r) => r.result.locationSimilarity === 50));
 const direct = graph.nodes
   .filter((n) => n.depth === 1)
   .map((n) => n.id)
@@ -106,5 +110,23 @@ assert.deepEqual(
 );
 console.log(
   "PASS: direct friends only, exact game request budget, durable resume, visible-sample scores, unavailable/hidden times, cache-only reopening",
+);
+const detailsPath = `/players/${run.rootId}/details`;
+const fromGames = await request<PlayerDetailsSnapshot>(detailsPath);
+assert.deepEqual(fromGames.profile, complete.root!.profile);
+const details = await request<PlayerDetailsSnapshot>(detailsPath, {
+  refresh: true,
+});
+assert.equal(details.profileStatus, "ok");
+assert.equal(details.aliasesStatus, "ok");
+assert.ok(details.aliases.length >= 1);
+assert.deepEqual(await request<PlayerDetailsSnapshot>(detailsPath), details);
+assert.deepEqual(
+  await request<PlayerDetailsSnapshot>(detailsPath, {}),
+  details,
+);
+assert.deepEqual((await request<GameScoresResponse>(path)).root, complete.root);
+console.log(
+  "PASS: hover profile and alias HTTP cache, shared game header, immutable score location snapshots",
 );
 console.log(`Game scores verified for run: ${run.id}`);

@@ -23,6 +23,10 @@ const row = (
   },
   result: {
     score,
+    gameScore: score,
+    locationSimilarity: null,
+    locationWeight: 0,
+    locationReason: "位置缺失，不参与评分",
     gameOverlap: score,
     timeSimilarity: score,
     sharedGameCount: 0,

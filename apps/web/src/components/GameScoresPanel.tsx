@@ -9,6 +9,7 @@ import {
   Gamepad2,
   Info,
   LoaderCircle,
+  MapPin,
   RefreshCw,
   ShieldCheck,
   Sparkles,
@@ -29,6 +30,7 @@ import {
   rankGameScores,
 } from "../lib/game-scores";
 import { Badge, Button, Input, cn } from "./ui";
+import { ProfileHoverTrigger } from "./ProfileHoverCard";
 
 const pageSize = 30;
 const percent = (value: number | null) =>
@@ -46,13 +48,13 @@ function PlayerAvatar({ row }: { row: GameScoreRow }) {
   const [failed, setFailed] = useState(false);
   useEffect(() => setFailed(false), [row.player.avatar]);
   return (
-    <span className="avatar">
+    <ProfileHoverTrigger player={row.player} className="avatar">
       {row.player.avatar && !failed ? (
         <img src={row.player.avatar} alt="" onError={() => setFailed(true)} />
       ) : (
         initials(row.player.name)
       )}
-    </span>
+    </ProfileHoverTrigger>
   );
 }
 function SnapshotMeta({
@@ -169,7 +171,7 @@ export function GameScoresPanel({ run }: { run?: CrawlRun }) {
               游戏相关度 <Badge>起点与直接好友</Badge>
               {run?.mode === "demo" && <Badge tone="amber">演示数据</Badge>}
             </h2>
-            <p>比较公开主页展示的游戏集合，以及这些游戏的累计时长分布。</p>
+            <p>比较公开展示的游戏与累计时长，公开填写位置仅作低权重参考。</p>
           </div>
         </div>
         <Button
@@ -206,8 +208,12 @@ export function GameScoresPanel({ run }: { run?: CrawlRun }) {
             <p>比较每款展示游戏在各自样本总累计时长中的占比</p>
           </div>
           <div className="game-formula-note">
-            两个分项均为 0–100%，加权得到 0–100
-            分。缺少累计时长、样本总时长为零或网页不可访问时不评分。
+            先由游戏重合度 × 40% + 累计时长分布 × 60% 得到游戏基础分。
+            双方都有可比较位置时，总分 = 游戏基础分 × 95% + 位置相似度 ×
+            5%，即游戏 / 时长 / 位置权重为 38% / 57% / 5%。 相同地区
+            100、同国家且地区不完全相同或仅公开国家 50、不同国家
+            0；任一方位置缺失或无法比较时，保持游戏基础分，不扣分。
+            位置由用户自行填写。缺少游戏累计时长、样本总时长为零或网页不可访问时仍不评分。
           </div>
         </div>
       )}
@@ -476,7 +482,11 @@ export function GameScoresPanel({ run }: { run?: CrawlRun }) {
               <div className="game-component-scores">
                 <div>
                   <span>
-                    游戏重合度 <small>权重 40%</small>
+                    游戏重合度{" "}
+                    <small>
+                      权重{" "}
+                      {selected.result.locationWeight === 5 ? "38%" : "40%"}
+                    </small>
                   </span>
                   <strong>
                     {selectedGameSetAvailable
@@ -493,7 +503,11 @@ export function GameScoresPanel({ run }: { run?: CrawlRun }) {
                 </div>
                 <div>
                   <span>
-                    累计时长分布 <small>权重 60%</small>
+                    累计时长分布{" "}
+                    <small>
+                      权重{" "}
+                      {selected.result.locationWeight === 5 ? "57%" : "60%"}
+                    </small>
                   </span>
                   <strong>
                     {selectedTimeAvailable
@@ -508,6 +522,55 @@ export function GameScoresPanel({ run }: { run?: CrawlRun }) {
                     />
                   </div>
                 </div>
+              </div>
+              <div className="game-location-comparison">
+                <div className="game-location-heading">
+                  <span>
+                    <MapPin size={13} />
+                    公开填写位置{" "}
+                    <small>
+                      权重{" "}
+                      {selected.result.locationWeight === 5 ? "5%" : "未启用"}
+                    </small>
+                  </span>
+                  <strong>
+                    {selected.result.locationSimilarity === null
+                      ? "—"
+                      : percent(selected.result.locationSimilarity)}
+                  </strong>
+                </div>
+                <div className="game-location-pair">
+                  <span>
+                    <small>A · 起点</small>
+                    {data?.root?.status === "ok"
+                      ? data.root.profile?.location?.label || "未公开或尚未采集"
+                      : "当前资料不可用"}
+                  </span>
+                  <span>
+                    <small>B · 好友</small>
+                    {selected.snapshot.status === "ok"
+                      ? selected.snapshot.profile?.location?.label ||
+                        "未公开或尚未采集"
+                      : "当前资料不可用"}
+                  </span>
+                </div>
+                <p>
+                  {selected.result.locationReason ||
+                    "旧样本尚未保存位置；刷新样本后可参与计算。"}
+                </p>
+                {selectedScore !== null && (
+                  <small>
+                    游戏基础分{" "}
+                    {selected.result.gameScore?.toFixed(1) ??
+                      selectedScore.toFixed(1)}
+                    {selected.result.locationWeight === 5
+                      ? " · 位置参与总分，最高权重 5%"
+                      : " · 缺少可比较位置时不扣分"}
+                  </small>
+                )}
+                <small>
+                  位置由用户自行填写；悬停资料与本次评分快照独立保存。
+                </small>
               </div>
               <div className="game-snapshot-grid">
                 <SnapshotMeta

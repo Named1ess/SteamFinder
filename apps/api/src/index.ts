@@ -14,6 +14,7 @@ import { graphResponse, analyze } from "./graph.js";
 import { boss, startQueue, enqueue, enqueueGameScores } from "./queue.js";
 import { createSearch } from "./search.js";
 import { getGameScores, startGameScoreJob } from "./game-scores.js";
+import { collectPlayerDetails, getPlayerDetails } from "./player-details.js";
 const app = Fastify({ logger: false, bodyLimit: 8192 });
 const provider =
   config.mode === "demo" ? new DemoProvider() : new PublicWebProvider();
@@ -68,6 +69,11 @@ app.get("/api/config", async () => ({
   requestDelayMs: config.delay,
 }));
 app.get("/api/runs", async () => ({ runs: await listRuns() }));
+app.get("/api/players/:id/details", async (request) => getPlayerDetails((request.params as { id: string }).id));
+app.post("/api/players/:id/details", async (request) => {
+  const options = parse(z.object({ refresh: z.boolean().optional() }).strict(), request.body ?? {});
+  return collectPlayerDetails((request.params as { id: string }).id, options, provider);
+});
 app.post("/api/runs", async (request) => {
   const input = parse(createSchema, request.body);
   const result = await createSearch(input, provider);

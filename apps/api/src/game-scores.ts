@@ -12,6 +12,7 @@ import { getRun, HttpError } from "./repository.js";
 import { SteamError, type Provider } from "./provider.js";
 import { BudgetError, CancelledError, steamRequest } from "./requests.js";
 import { calculateGameScore } from "./game-scoring.js";
+import { saveProfileDetails } from "./player-details.js";
 
 const iso = (value: Date | null) => value?.toISOString() ?? null;
 const active = (status: string) => ["queued", "running"].includes(status);
@@ -49,6 +50,7 @@ function snapshot(row: Record<string, any>): GameProfileSnapshot {
     status: row.status,
     scope: "profile_recent",
     games: row.games,
+    profile: row.profile ?? null,
     fetchedAt: iso(row.fetched_at),
     attemptedAt: iso(row.attempted_at),
     message: row.message,
@@ -62,7 +64,7 @@ export async function getGameScores(runId: string): Promise<GameScoresResponse> 
     runId,
     rootId: run.rootId,
     scope: "profile_recent",
-    formulaVersion: "public-games-v1",
+    formulaVersion: "public-games-location-v2",
     root: null,
     job: null,
     rows: [],
@@ -154,7 +156,7 @@ export async function startGameScoreJob(
 async function pinCache(client: pg.PoolClient, jobId: string, playerId: string) {
   await client.query(
     `UPDATE game_score_players s SET processed=true,status=p.status,scope=p.scope,
-     games=p.games,fetched_at=p.fetched_at,attempted_at=p.attempted_at,message=p.message
+     games=p.games,profile=p.profile,fetched_at=p.fetched_at,attempted_at=p.attempted_at,message=p.message
      FROM game_profiles p WHERE s.job_id=$1 AND s.player_id=$2 AND p.mode=$3 AND p.player_id=$2`,
     [jobId, playerId, config.mode],
   );
@@ -163,12 +165,13 @@ async function pinCache(client: pg.PoolClient, jobId: string, playerId: string) 
 async function saveGames(jobId: string, playerId: string, games: PublicGames) {
   await transaction(async (client) => {
     await client.query(
-      `INSERT INTO game_profiles(mode,player_id,status,scope,games,fetched_at,attempted_at)
-       VALUES($1,$2,'ok',$3,$4,now(),now())
+      `INSERT INTO game_profiles(mode,player_id,status,scope,games,profile,fetched_at,attempted_at)
+       VALUES($1,$2,'ok',$3,$4,$5,now(),now())
        ON CONFLICT(mode,player_id) DO UPDATE SET status='ok',scope=EXCLUDED.scope,
-       games=EXCLUDED.games,fetched_at=now(),attempted_at=now(),message=NULL`,
-      [config.mode, playerId, games.scope, JSON.stringify(games.games)],
+       games=EXCLUDED.games,profile=EXCLUDED.profile,fetched_at=now(),attempted_at=now(),message=NULL`,
+      [config.mode, playerId, games.scope, JSON.stringify(games.games), games.profile ? JSON.stringify(games.profile) : null],
     );
+    if (games.profile) await saveProfileDetails(client, playerId, games.profile);
     await pinCache(client, jobId, playerId);
   });
 }

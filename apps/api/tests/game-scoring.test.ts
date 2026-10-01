@@ -19,6 +19,80 @@ const snapshot = (
   })),
 });
 describe("visible-game similarity", () => {
+  it("applies at most five percent for public location and leaves undisclosed locations neutral", () => {
+    const a = snapshot([
+      ["1", 75],
+      ["2", 25],
+    ]);
+    const b = snapshot([
+      ["1", 25],
+      ["2", 75],
+    ]);
+    const location = {
+      label: "Shanghai, Shanghai, China",
+      countryCode: "cn",
+      locality: "Shanghai, Shanghai",
+    };
+    a.profile = { realName: null, location };
+    expect(calculateGameScore(a, b)).toMatchObject({
+      gameScore: 70,
+      score: 70,
+      locationWeight: 0,
+      locationSimilarity: null,
+    });
+    b.profile = {
+      realName: "Unrelated",
+      location: { ...location, locality: "ＳＨＡＮＧＨＡＩ,   Shanghai" },
+    };
+    expect(calculateGameScore(a, b)).toMatchObject({
+      gameScore: 70,
+      score: 71.5,
+      locationWeight: 5,
+      locationSimilarity: 100,
+    });
+    b.profile.location = {
+      label: "Beijing, China",
+      locality: "Beijing",
+      countryCode: "cn",
+    };
+    expect(calculateGameScore(a, b)).toMatchObject({
+      score: 69,
+      locationSimilarity: 50,
+    });
+    b.profile.location = { label: "Japan", locality: null, countryCode: "jp" };
+    expect(calculateGameScore(a, b)).toMatchObject({
+      score: 66.5,
+      locationSimilarity: 0,
+    });
+    b.profile.location.countryCode = null;
+    expect(calculateGameScore(a, b)).toMatchObject({
+      score: 70,
+      locationWeight: 0,
+      locationSimilarity: null,
+    });
+  });
+  it("does not claim a full location match for country-only fields or score with missing games", () => {
+    const a = snapshot([["1", 10]]),
+      b = snapshot([["1", 10]]);
+    a.profile = b.profile = {
+      realName: null,
+      location: { label: "China", countryCode: "cn", locality: null },
+    };
+    expect(calculateGameScore(a, b)).toMatchObject({
+      score: 97.5,
+      locationSimilarity: 50,
+    });
+    b.games = [];
+    expect(calculateGameScore(a, b)).toMatchObject({
+      score: null,
+      gameScore: null,
+      locationWeight: 0,
+    });
+    expect(calculateGameScore({ ...a, status: "error" }, a)).toMatchObject({
+      score: null,
+      locationSimilarity: null,
+    });
+  });
   it("gives identical proportions 100 regardless of total playtime", () => {
     const result = calculateGameScore(
       snapshot([

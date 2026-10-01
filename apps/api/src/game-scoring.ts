@@ -5,6 +5,42 @@ import type {
 } from "../../../packages/shared/src/index.js";
 
 const round = (value: number) => Math.round(value * 10) / 10;
+const normalizeLocation = (value: string) =>
+  value
+    .normalize("NFKC")
+    .replace(/[\u200B-\u200F\uFEFF]/g, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+function compareLocation(
+  root: GameProfileSnapshot,
+  friend: GameProfileSnapshot,
+) {
+  const a = root.status === "ok" ? root.profile?.location : null;
+  const b = friend.status === "ok" ? friend.profile?.location : null;
+  if (
+    !a?.countryCode ||
+    !b?.countryCode ||
+    !/^[a-z]{2}$/i.test(a.countryCode) ||
+    !/^[a-z]{2}$/i.test(b.countryCode)
+  )
+    return {
+      similarity: null,
+      reason: "任一方位置未公开或无法比较，位置不参与评分",
+    };
+  if (a.countryCode.toLowerCase() !== b.countryCode.toLowerCase())
+    return { similarity: 0, reason: "公开填写的国家或地区不同" };
+  if (
+    a.locality &&
+    b.locality &&
+    normalizeLocation(a.locality) === normalizeLocation(b.locality)
+  )
+    return { similarity: 100, reason: "公开填写的国家或地区及具体地点相同" };
+  return {
+    similarity: 50,
+    reason: "公开填写的国家或地区相同，具体地点不同或未填写",
+  };
+}
 function uniqueGames(games: GamePlaytime[]) {
   const result = new Map<string, GamePlaytime>();
   for (const game of games)
@@ -50,8 +86,13 @@ export function calculateGameScore(
   const union = new Set([...a.keys(), ...b.keys()]);
   const rootTotal = root.status === "ok" ? total(root.games) : null;
   const friendTotal = friend.status === "ok" ? total(friend.games) : null;
+  const location = compareLocation(root, friend);
   const result: GameScoreBreakdown = {
     score: null,
+    gameScore: null,
+    locationSimilarity: location.similarity,
+    locationWeight: 0,
+    locationReason: location.reason,
     gameOverlap: null,
     timeSimilarity: null,
     sharedGameCount: shared.length,
@@ -96,6 +137,13 @@ export function calculateGameScore(
     ),
   );
   result.timeSimilarity = round(timeOverlap * 100);
-  result.score = round(40 * overlap + 60 * timeOverlap);
+  const gameScore = 40 * overlap + 60 * timeOverlap;
+  result.gameScore = round(gameScore);
+  result.locationWeight = location.similarity === null ? 0 : 5;
+  result.score = round(
+    location.similarity === null
+      ? gameScore
+      : gameScore * 0.95 + location.similarity * 0.05,
+  );
   return result;
 }

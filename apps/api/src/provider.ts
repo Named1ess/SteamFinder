@@ -2,7 +2,12 @@ import { DEFAULT_ROOT } from "../../../packages/shared/src/index.js";
 import { validSteamId } from "./identity.js";
 import { parseFriendsPage, parseProfilePage } from "./community.js";
 import { parsePublicGames } from "./community-games.js";
-import type { PublicGames } from "../../../packages/shared/src/index.js";
+import type {
+  PublicGames,
+  PublicProfileDetails,
+  ProfileAlias,
+} from "../../../packages/shared/src/index.js";
+import { parsePublicAliases, parsePublicProfile } from "./community-profile.js";
 import { SteamError, classifyStatus } from "./steam-error.js";
 export { SteamError, classifyStatus } from "./steam-error.js";
 
@@ -21,21 +26,30 @@ export interface Provider {
   summaries(ids: string[]): Promise<Player[]>;
   vanity(name: string): Promise<string>;
   games?(id: string): Promise<PublicGames>;
+  profile?(id: string): Promise<PublicProfileDetails>;
+  aliases?(id: string): Promise<ProfileAlias[]>;
 }
 
 export class PublicWebProvider implements Provider {
   readonly summaryBatchSize = 1;
-  private async get(path: string): Promise<string> {
+  private async get(path: string, aliases = false): Promise<string> {
     const url = `https://steamcommunity.com/${path}?l=english`;
-    const maxBytes = 8 * 1024 * 1024;
+    const maxBytes = aliases ? 256 * 1024 : 8 * 1024 * 1024;
     try {
       const response = await fetch(url, {
+        ...(aliases ? { method: "POST", body: "" } : {}),
         signal: AbortSignal.timeout(20000),
         redirect: "manual",
         headers: {
           "user-agent":
             "SteamFinder/0.1 (public Steam Community profile explorer)",
-          accept: "text/html",
+          accept: aliases ? "application/json" : "text/html",
+          ...(aliases
+            ? {
+                "content-type":
+                  "application/x-www-form-urlencoded; charset=UTF-8",
+              }
+            : {}),
           "accept-language": "en-US,en;q=0.9",
         },
       });
@@ -66,10 +80,15 @@ export class PublicWebProvider implements Provider {
         !response.headers
           .get("content-type")
           ?.toLowerCase()
-          .includes("text/html")
+          .includes(aliases ? "application/json" : "text/html")
       ) {
         await response.body?.cancel();
-        throw new SteamError("invalid", "Steam 返回的内容不是公开网页");
+        throw new SteamError(
+          "invalid",
+          aliases
+            ? "Steam 返回的内容不是公开名称记录"
+            : "Steam 返回的内容不是公开网页",
+        );
       }
       if (Number(response.headers.get("content-length")) > maxBytes) {
         await response.body?.cancel();
@@ -102,7 +121,21 @@ export class PublicWebProvider implements Provider {
   }
   async games(id: string): Promise<PublicGames> {
     if (!validSteamId(id)) throw new SteamError("invalid", "无效的 Steam ID");
-    return parsePublicGames(await this.get(`profiles/${id}/`), id);
+    const html = await this.get(`profiles/${id}/`);
+    return {
+      ...parsePublicGames(html, id),
+      profile: parsePublicProfile(html, id),
+    };
+  }
+  async profile(id: string): Promise<PublicProfileDetails> {
+    if (!validSteamId(id)) throw new SteamError("invalid", "无效的 Steam ID");
+    return parsePublicProfile(await this.get(`profiles/${id}/`), id);
+  }
+  async aliases(id: string): Promise<ProfileAlias[]> {
+    if (!validSteamId(id)) throw new SteamError("invalid", "无效的 Steam ID");
+    return parsePublicAliases(
+      await this.get(`profiles/${id}/ajaxaliases/`, true),
+    );
   }
   async friends(id: string): Promise<string[]> {
     return (await this.friendsWithPlayers(id)).friends;
@@ -129,6 +162,36 @@ export const demoIds = [
   ),
 ];
 export class DemoProvider implements Provider {
+  async profile(id: string): Promise<PublicProfileDetails> {
+    const index = demoIds.indexOf(id);
+    if (index === 12) throw new SteamError("private", "演示：资料未公开");
+    return {
+      realName: `虚构资料名称 ${Math.max(0, index)}`,
+      location:
+        index === 11
+          ? null
+          : index % 3 === 0 || index % 5 === 0
+            ? {
+                label: "Shanghai, Shanghai, China",
+                countryCode: "cn",
+                locality: "Shanghai, Shanghai",
+              }
+            : index % 3 === 1
+              ? {
+                  label: "Beijing, China",
+                  countryCode: "cn",
+                  locality: "Beijing",
+                }
+              : { label: "Japan", countryCode: "jp", locality: null },
+    };
+  }
+  async aliases(id: string): Promise<ProfileAlias[]> {
+    const index = demoIds.indexOf(id);
+    return [
+      { name: `演示当前名 ${index}`, changedAt: "1 Oct, 2026 @ 12:00pm" },
+      { name: `演示旧名 ${index}`, changedAt: "1 Jan, 2025 @ 1:00pm" },
+    ];
+  }
   async games(id: string): Promise<PublicGames> {
     const index = demoIds.indexOf(id);
     if (index === 12) throw new SteamError("private", "演示：游戏活动未公开");
@@ -141,6 +204,7 @@ export class DemoProvider implements Provider {
     ];
     return {
       scope: "profile_recent",
+      profile: await this.profile(id),
       games: Array.from({ length: 3 }, (_, offset) => {
         const game =
           selections[(Math.max(index, 0) + offset) % selections.length];

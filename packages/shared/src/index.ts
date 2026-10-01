@@ -100,6 +100,35 @@ export interface GamePlaytime {
 export interface PublicGames {
   scope: "profile_recent";
   games: GamePlaytime[];
+  /** Public header captured with the same page, absent on older snapshots. */
+  profile?: PublicProfileDetails | null;
+}
+export interface ProfileLocation {
+  label: string;
+  countryCode: string | null;
+  /** Exact displayed subnational text, without inferring a city or region. */
+  locality: string | null;
+}
+export interface PublicProfileDetails {
+  realName: string | null;
+  location: ProfileLocation | null;
+}
+export interface ProfileAlias {
+  name: string;
+  changedAt: string | null;
+}
+export interface PlayerDetailsSnapshot {
+  playerId: string;
+  profile: PublicProfileDetails | null;
+  profileStatus: FetchStatus;
+  profileFetchedAt: string | null;
+  profileAttemptedAt: string | null;
+  profileMessage: string | null;
+  aliases: ProfileAlias[];
+  aliasesStatus: FetchStatus;
+  aliasesFetchedAt: string | null;
+  aliasesAttemptedAt: string | null;
+  aliasesMessage: string | null;
 }
 export interface GameProfileSnapshot extends PublicGames {
   playerId: string;
@@ -110,7 +139,12 @@ export interface GameProfileSnapshot extends PublicGames {
 }
 export interface GameScoreBreakdown {
   score: number | null;
-  /** Component percentages, before the 40%/60% weights. */
+  gameScore: number | null;
+  locationSimilarity: number | null;
+  /** 5 when both locations and the game score are usable, otherwise 0. */
+  locationWeight: number;
+  locationReason: string;
+  /** Component percentages, before the base 40%/60% weights. */
   gameOverlap: number | null;
   timeSimilarity: number | null;
   sharedGameCount: number;
@@ -150,7 +184,7 @@ export interface GameScoresResponse {
   runId: string;
   rootId: string;
   scope: "profile_recent";
-  formulaVersion: "public-games-v1";
+  formulaVersion: "public-games-location-v2";
   root: GameProfileSnapshot | null;
   job: GameScoreJob | null;
   rows: GameScoreRow[];

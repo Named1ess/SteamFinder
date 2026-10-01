@@ -6,6 +6,7 @@ import type {
   CreateRunResult,
   GraphResponse,
   GameScoresResponse,
+  PlayerDetailsSnapshot,
 } from "../../../../packages/shared/src/index";
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -20,6 +21,18 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 export const api = {
   config: () => request<AppConfig>("/config"),
+  playerDetails: (id: string) =>
+    request<PlayerDetailsSnapshot>(
+      `/players/${encodeURIComponent(id)}/details`,
+    ),
+  collectPlayerDetails: (id: string, refresh: boolean) =>
+    request<PlayerDetailsSnapshot>(
+      `/players/${encodeURIComponent(id)}/details`,
+      {
+        method: "POST",
+        body: JSON.stringify({ refresh }),
+      },
+    ),
   runs: () => request<{ runs: CrawlRun[] }>("/runs"),
   run: (id: string) => request<CrawlRun>(`/runs/${encodeURIComponent(id)}`),
   graph: (id: string, limit: number, depth: number) =>

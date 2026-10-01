@@ -7,6 +7,7 @@ import type {
 } from "../../../../packages/shared/src/index";
 import { depthRingPositions, graphInitials } from "../lib/graph";
 import { Button } from "./ui";
+import { useProfileHover } from "./ProfileHoverCard";
 
 const colors = [
   "#61d7c0",
@@ -36,6 +37,9 @@ export default function NetworkGraph({
   const container = useRef<HTMLDivElement>(null);
   const graphRef = useRef<Graph | null>(null);
   const selectRef = useRef(onSelect);
+  const hover = useProfileHover();
+  const hoverRef = useRef(hover);
+  hoverRef.current = hover;
   const [ready, setReady] = useState(0);
   const [error, setError] = useState<string | null>(null);
   selectRef.current = onSelect;
@@ -123,12 +127,35 @@ export default function NetworkGraph({
       behaviors: ["drag-canvas", "zoom-canvas", "drag-element"],
     });
     graphRef.current = graph;
+    const showProfile = (id: string, immediate = false) => {
+      const node = nodes.find((item) => item.id === id);
+      if (!node) return;
+      const [x, y] = graph.getClientByCanvas(graph.getElementPosition(id));
+      const radius =
+        (node.id === rootId ? 31 : (36 + Math.min(node.degree, 15)) / 2) *
+        graph.getZoom();
+      hoverRef.current.show(
+        node,
+        {
+          left: x - radius,
+          right: x + radius,
+          top: y - radius,
+          bottom: y + radius,
+        },
+        immediate,
+      );
+    };
     graph.on("node:click", (event) => {
       const target = (event as IElementEvent).target;
-      if (target?.id) selectRef.current(String(target.id));
+      if (target?.id) {
+        selectRef.current(String(target.id));
+        if ((event as IElementEvent).pointerType === "touch")
+          showProfile(String(target.id), true);
+      }
     });
     graph.on("node:pointerenter", (event) => {
       const id = String((event as IElementEvent).target.id);
+      if ((event as IElementEvent).pointerType !== "touch") showProfile(id);
       void graph
         .setElementState(id, [
           ...graph.getElementState(id).filter((state) => state !== "hover"),
@@ -137,6 +164,8 @@ export default function NetworkGraph({
         .catch(() => undefined);
     });
     graph.on("node:pointerleave", (event) => {
+      if ((event as IElementEvent).pointerType !== "touch")
+        hoverRef.current.leave();
       const id = String((event as IElementEvent).target.id);
       void graph
         .setElementState(
@@ -145,6 +174,9 @@ export default function NetworkGraph({
         )
         .catch(() => undefined);
     });
+    graph.on("canvas:click", () => hoverRef.current.close());
+    graph.on("node:dragstart", () => hoverRef.current.close());
+    graph.on("canvas:dragstart", () => hoverRef.current.close());
     const observer = new ResizeObserver(() => {
       if (disposed || !container.current) return;
       const { width, height } = container.current.getBoundingClientRect();
@@ -176,6 +208,7 @@ export default function NetworkGraph({
       clearTimeout(resizeTimer);
       observer.disconnect();
       graphRef.current = null;
+      hoverRef.current.close();
       graph.destroy();
     };
   }, [nodes, edges, rootId, layout]);

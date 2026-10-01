@@ -85,3 +85,13 @@ CREATE TABLE IF NOT EXISTS game_score_players (
 );
 CREATE INDEX IF NOT EXISTS game_job_history ON game_score_jobs(mode,run_id,created_at DESC);
 CREATE INDEX IF NOT EXISTS game_job_pending ON game_score_players(job_id,processed,is_root);
+ALTER TABLE game_profiles ADD COLUMN IF NOT EXISTS profile jsonb;
+ALTER TABLE game_score_players ADD COLUMN IF NOT EXISTS profile jsonb;
+CREATE TABLE IF NOT EXISTS player_details (
+  mode text NOT NULL, player_id text NOT NULL, profile jsonb,
+  profile_status text NOT NULL DEFAULT 'unknown', profile_fetched_at timestamptz,
+  profile_attempted_at timestamptz, profile_message text,
+  aliases jsonb NOT NULL DEFAULT '[]', aliases_status text NOT NULL DEFAULT 'unknown',
+  aliases_fetched_at timestamptz, aliases_attempted_at timestamptz, aliases_message text,
+  PRIMARY KEY(mode,player_id)
+);
