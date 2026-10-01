@@ -1,0 +1,124 @@
+import {
+  pgTable,
+  text,
+  integer,
+  boolean,
+  timestamp,
+  uuid,
+  primaryKey,
+  date,
+} from "drizzle-orm/pg-core";
+const time = (name: string) => timestamp(name, { withTimezone: true });
+export const players = pgTable(
+  "players",
+  {
+    mode: text("mode").notNull(),
+    id: text("id").notNull(),
+    name: text("name").notNull(),
+    avatar: text("avatar"),
+    profileUrl: text("profile_url").notNull(),
+    summaryAt: time("summary_at"),
+  },
+  (t) => [primaryKey({ columns: [t.mode, t.id] })],
+);
+export const friendLists = pgTable(
+  "friend_lists",
+  {
+    mode: text("mode").notNull(),
+    ownerId: text("owner_id").notNull(),
+    fetchedAt: time("fetched_at"),
+    attemptedAt: time("attempted_at"),
+    status: text("status").notNull().default("unknown"),
+    friendCount: integer("friend_count"),
+  },
+  (t) => [primaryKey({ columns: [t.mode, t.ownerId] })],
+);
+export const observations = pgTable(
+  "friend_observations",
+  {
+    mode: text("mode").notNull(),
+    ownerId: text("owner_id").notNull(),
+    friendId: text("friend_id").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.mode, t.ownerId, t.friendId] })],
+);
+export const edges = pgTable(
+  "friendship_edges",
+  {
+    mode: text("mode").notNull(),
+    source: text("source").notNull(),
+    target: text("target").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.mode, t.source, t.target] })],
+);
+export const runs = pgTable("crawl_runs", {
+  id: uuid("id").primaryKey(),
+  rootId: text("root_id").notNull(),
+  mode: text("mode").notNull(),
+  depth: integer("depth").notNull(),
+  maxNodes: integer("max_nodes").notNull(),
+  maxRequests: integer("max_requests").notNull(),
+  status: text("status").notNull().default("queued"),
+  requestCount: integer("request_count").notNull().default(0),
+  cacheHits: integer("cache_hits").notNull().default(0),
+  refresh: boolean("refresh").notNull().default(false),
+  message: text("message"),
+  createdAt: time("created_at").notNull().defaultNow(),
+  updatedAt: time("updated_at").notNull().defaultNow(),
+  completedAt: time("completed_at"),
+});
+export const runNodes = pgTable(
+  "run_nodes",
+  {
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    playerId: text("player_id").notNull(),
+    depth: integer("depth").notNull(),
+    expanded: boolean("expanded").notNull().default(false),
+    observed: boolean("observed").notNull().default(false),
+    hydrated: boolean("hydrated").notNull().default(false),
+    fetchStatus: text("fetch_status").notNull().default("unknown"),
+    fetchedAt: time("fetched_at"),
+    friendCount: integer("friend_count"),
+  },
+  (t) => [primaryKey({ columns: [t.runId, t.playerId] })],
+);
+export const runObservations = pgTable(
+  "run_friend_observations",
+  {
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    ownerId: text("owner_id").notNull(),
+    friendId: text("friend_id").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.runId, t.ownerId, t.friendId] })],
+);
+export const runEdges = pgTable(
+  "run_edges",
+  {
+    runId: uuid("run_id")
+      .notNull()
+      .references(() => runs.id, { onDelete: "cascade" }),
+    source: text("source").notNull(),
+    target: text("target").notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.runId, t.source, t.target] })],
+);
+export const budgets = pgTable("request_budgets", {
+  mode: text("mode").primaryKey(),
+  day: date("day").notNull(),
+  requests: integer("requests").notNull().default(0),
+  lastCall: time("last_call").notNull(),
+});
+export const vanityResolutions = pgTable(
+  "vanity_resolutions",
+  {
+    mode: text("mode").notNull(),
+    vanity: text("vanity").notNull(),
+    playerId: text("player_id").notNull(),
+    resolvedAt: time("resolved_at").notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ columns: [t.mode, t.vanity] })],
+);

@@ -1,0 +1,46 @@
+import type {
+  AnalysisResult,
+  AppConfig,
+  CrawlRun,
+  CreateRunInput,
+  CreateRunResult,
+  GraphResponse,
+} from "../../../../packages/shared/src/index";
+
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`/api${path}`, {
+    ...init,
+    headers: { "Content-Type": "application/json", ...init?.headers },
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok)
+    throw new Error(body?.message || `请求失败（${response.status}）`);
+  return body as T;
+}
+export const api = {
+  config: () => request<AppConfig>("/config"),
+  runs: () => request<{ runs: CrawlRun[] }>("/runs"),
+  run: (id: string) => request<CrawlRun>(`/runs/${encodeURIComponent(id)}`),
+  graph: (id: string, limit: number, depth: number) =>
+    request<GraphResponse>(
+      `/runs/${encodeURIComponent(id)}/graph?limit=${limit}&depth=${depth}`,
+    ),
+  create: (input: CreateRunInput) =>
+    request<CreateRunResult>("/runs", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+  cancel: (id: string) =>
+    request<CrawlRun>(`/runs/${encodeURIComponent(id)}/cancel`, {
+      method: "POST",
+    }),
+  resume: (id: string, maxNodes: number, maxRequests: number) =>
+    request<CrawlRun>(`/runs/${encodeURIComponent(id)}/resume`, {
+      method: "POST",
+      body: JSON.stringify({ maxNodes, maxRequests }),
+    }),
+  analysis: (id: string, kind: "mutual" | "path", from: string, to: string) =>
+    request<AnalysisResult>(
+      `/runs/${encodeURIComponent(id)}/analysis?${new URLSearchParams({ kind, from, to })}`,
+    ),
+};

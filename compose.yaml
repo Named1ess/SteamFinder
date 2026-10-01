@@ -1,0 +1,101 @@
+name: steamfinder
+
+x-backend: &backend
+  image: steamfinder-server:local
+  build:
+    context: .
+    target: runtime
+  environment: &backend-env
+    PGHOST: db
+    PGPORT: 5432
+    PGUSER: steamfinder
+    PGPASSWORD: ${POSTGRES_PASSWORD:-steamfinder}
+    PGDATABASE: steamfinder
+    STEAM_MODE: ${STEAM_MODE:-demo}
+    STEAM_API_KEY: ${STEAM_API_KEY:-}
+    API_PORT: 3001
+    STEAM_REQUEST_DELAY_MS: ${STEAM_REQUEST_DELAY_MS:-350}
+    DAILY_REQUEST_LIMIT: ${DAILY_REQUEST_LIMIT:-90000}
+    NODE_ENV: production
+  init: true
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: steamfinder
+      POSTGRES_USER: steamfinder
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-steamfinder}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U steamfinder -d steamfinder"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    <<: *backend
+    command: ["npm", "run", "migrate"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    <<: *backend
+    command: ["npm", "run", "api"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+      start_period: 10s
+    restart: unless-stopped
+
+  worker:
+    <<: *backend
+    command: ["npm", "run", "worker"]
+    depends_on:
+      api:
+        condition: service_healthy
+    stop_grace_period: 25s
+    restart: unless-stopped
+
+  web:
+    image: steamfinder-web:local
+    build:
+      context: .
+      target: web
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-8080}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  test:
+    <<: *backend
+    profiles: ["tools"]
+    environment:
+      <<: *backend-env
+      TEST_BASE_URL: http://web
+    command: ["npm", "test"]
+
+volumes:
+  postgres_data:
