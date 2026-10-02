@@ -17,7 +17,7 @@ import { getGameScores, startGameScoreJob } from "./game-scores.js";
 import { getRunGroups, startGroupCollectionJob, recoverGroupCollectionJobs } from "./group-scores.js";
 import { collectPlayerDetails, getPlayerDetails } from "./player-details.js";
 import { playerSearchQuerySchema, searchRunPlayers } from "./player-search.js";
-import { getRelationshipScores, relationshipScoresQuerySchema } from "./relationship-scores.js";
+import { getRelationshipScores, relationshipScoresQuerySchema, relationshipPageQuerySchema, getRelationshipScorePage, getRelationshipOverview, getRelationshipScoreDetail } from "./relationship-scores.js";
 const app = Fastify({ logger: false, bodyLimit: 8192 });
 const provider =
   config.mode === "demo" ? new DemoProvider() : new PublicWebProvider();
@@ -102,6 +102,15 @@ app.post("/api/runs/:id/groups", async (request) => {
 app.get("/api/runs/:id/relationship-scores", async (request) =>
   getRelationshipScores(idFrom(request), parse(relationshipScoresQuerySchema, request.query).center),
 );
+app.get("/api/runs/:id/relationship-scores/page", async (request) =>
+  getRelationshipScorePage(idFrom(request), parse(relationshipPageQuerySchema, request.query)),
+);
+app.get("/api/runs/:id/relationship-scores/overview", async (request) =>
+  getRelationshipOverview(idFrom(request), parse(relationshipScoresQuerySchema, request.query).center),
+);
+app.get("/api/runs/:id/relationship-scores/players/:playerId", async (request) =>
+  getRelationshipScoreDetail(idFrom(request), (request.params as { playerId: string }).playerId, parse(relationshipScoresQuerySchema, request.query).center),
+);
 app.post("/api/runs/:id/game-scores", async (request) => {
   const id = idFrom(request);
   const options = parse(
@@ -125,7 +134,7 @@ app.get("/api/runs/:id/graph", async (request) => {
     request.query,
   );
   const run = await getRun(id),
-    data = await getGraphData(id);
+    data = await getGraphData(id, run);
   return graphResponse(run, data.nodes, data.edges, query.limit, query.depth);
 });
 app.get("/api/runs/:id/analysis", async (request) => {

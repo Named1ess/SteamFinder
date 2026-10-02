@@ -47,6 +47,8 @@ CREATE TABLE IF NOT EXISTS run_friend_observations (
   owner_id text NOT NULL, friend_id text NOT NULL,
   PRIMARY KEY(run_id,owner_id,friend_id)
 );
+CREATE INDEX IF NOT EXISTS run_observations_friend ON run_friend_observations(run_id,friend_id);
+CREATE INDEX IF NOT EXISTS run_edges_target ON run_edges(run_id,target);
 -- Upgrade checkpoints produced before per-run evidence was added. Subsequent
 -- migrations do not change a run's snapshots, including successful empty lists.
 INSERT INTO run_friend_observations(run_id,owner_id,friend_id)

@@ -1,6 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type { RunGroupsResponse } from "../../../../packages/shared/src/index";
-import { refreshRelationshipScores } from "./relationship-scores";
+import { refreshRelationshipScores, scheduleRelationshipScores } from "./relationship-scores";
 
 /** One score refresh for each observed group revision, isolated to this run. */
 export function createGroupScoreSync(
@@ -17,7 +17,11 @@ export function createGroupScoreSync(
       snapshot.job?.status,
     ]);
     if (revision === previous) return;
+    const initial = previous === undefined;
     previous = revision;
-    await refreshRelationshipScores(client, runId);
+    if (initial && !snapshot.job) return;
+    if (snapshot.job && ["queued", "running"].includes(snapshot.job.status))
+      await scheduleRelationshipScores(client, runId);
+    else await refreshRelationshipScores(client, runId);
   };
 }

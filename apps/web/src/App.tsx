@@ -36,10 +36,11 @@ import type {
   AnalysisResult,
   CrawlRun,
   GraphNode,
+  GraphResponse,
 } from "../../../packages/shared/src/index";
 import { DEFAULT_ROOT } from "../../../packages/shared/src/index";
 import { api } from "./lib/api";
-import { refreshQuerySnapshot } from "./lib/query-refresh";
+import { refreshQuerySnapshot, scheduleQueryRefresh } from "./lib/query-refresh";
 import {
   activeRun,
   fetchText,
@@ -50,8 +51,7 @@ import {
   statusText,
 } from "./lib/graph";
 import { Badge, Button, Input, cn } from "./components/ui";
-import { GameScoresPanel } from "./components/GameScoresPanel";
-import { RelationshipScoresPanel } from "./components/RelationshipScoresPanel";
+import { DeferredPanel } from "./components/DeferredPanel";
 import { PlayerCombobox } from "./components/PlayerCombobox";
 import {
   ProfileHoverProvider,
@@ -60,6 +60,8 @@ import {
 
 const NetworkGraph = lazy(() => import("./components/NetworkGraph"));
 const OverviewChart = lazy(() => import("./components/OverviewChart"));
+const GameScoresPanel = lazy(() => import("./components/GameScoresPanel").then(module => ({ default: module.GameScoresPanel })));
+const RelationshipScoresPanel = lazy(() => import("./components/RelationshipScoresPanel").then(module => ({ default: module.RelationshipScoresPanel })));
 const format = (value: number) => value.toLocaleString("zh-CN");
 const getRunId = () => new URLSearchParams(window.location.search).get("run");
 
@@ -180,6 +182,8 @@ export function App() {
   const [resumeRequests, setResumeRequests] = useState(1000);
   const [notice, setNotice] = useState<string | null>(null);
   const [sseConnected, setSseConnected] = useState(false);
+  const lastGraphSnapshot = useRef<{ id: string; version: string } | null>(null);
+  const lastPlayerSnapshot = useRef<string | null>(null);
   const [rightTab, setRightTab] = useState<"overview" | "analysis">("overview");
   const analysisPanel = useRef<HTMLElement>(null);
   const config = useQuery({
@@ -190,27 +194,42 @@ export function App() {
   const history = useQuery({
     queryKey: ["runs"],
     queryFn: api.runs,
-    refetchInterval: 10000,
+    refetchInterval: sseConnected ? false : 10000,
   });
   const current = useQuery({
     queryKey: ["run", runId],
     queryFn: () => api.run(runId!),
     enabled: !!runId,
     refetchInterval: (query) =>
-      activeRun(query.state.data?.status) ? 2500 : false,
+      activeRun(query.state.data?.status) && !sseConnected ? 2500 : false,
   });
   const run = current.data;
   useEffect(() => {
-    if (run?.id)
-      void refreshQuerySnapshot(client, ["run-players", run.id]);
+    if (!run) return;
+    const version = `${run.id}:${run.nodeCount}:${run.status}`;
+    const previous = lastPlayerSnapshot.current;
+    lastPlayerSnapshot.current = version;
+    if (previous === version) return;
+    const refresh = activeRun(run.status) ? scheduleQueryRefresh : refreshQuerySnapshot;
+    void refresh(client, ["run-players", run.id]);
   }, [client, run?.id, run?.nodeCount, run?.status]);
   useEffect(() => {
-    // Polling can observe completion before SSE, so always read the final graph.
-    if (run?.id && !activeRun(run.status))
-      void refreshQuerySnapshot(client, ["graph", run.id]);
-  }, [client, run?.id, run?.status]);
-  const graphQuery = useQuery({
+    if (!run) return;
+    const version = [run.updatedAt, run.status, run.nodeCount, run.edgeCount, run.fetchedCount, run.privateCount, run.errorCount].join(":");
+    const previous = lastGraphSnapshot.current;
+    lastGraphSnapshot.current = { id: run.id, version };
+    // Enabling the graph query already performs its initial read.
+    if (!previous || previous.id !== run.id || previous.version === version) return;
+    // A final snapshot must supersede even an initial read started before completion.
+    const refresh = activeRun(run.status) ? scheduleQueryRefresh : refreshQuerySnapshot;
+    void refresh(client, ["graph", run.id]);
+    void scheduleQueryRefresh(client, ["runs"]);
+  }, [client, run?.id, run?.updatedAt, run?.status, run?.nodeCount, run?.edgeCount, run?.fetchedCount, run?.privateCount, run?.errorCount]);
+  const graphQuery = useQuery<GraphResponse>({
     queryKey: ["graph", runId, displayLimit, displayDepth],
+    // Keep the canvas mounted while changing filters, without showing another run.
+    placeholderData: (previous, previousQuery) =>
+      previousQuery?.queryKey[1] === runId ? previous : undefined,
     queryFn: ({ signal }) =>
       api.graph(
         runId!,
@@ -219,10 +238,11 @@ export function App() {
         signal,
       ),
     enabled: !!run,
-    refetchInterval: activeRun(run?.status) ? 3500 : false,
+    // The run query and SSE share the version-driven refresh above.
+    refetchInterval: false,
   });
   const graph = graphQuery.data;
-  const merged = useMemo(() => mergeGraph(graph, analysis), [graph, analysis]);
+  const merged = useMemo(() => mergeGraph(graph, analysis), [graph?.nodes, graph?.edges, analysis]);
   const selected = merged.nodes.find((node) => node.id === selectedId);
   const matches = useMemo(
     () =>
@@ -292,23 +312,23 @@ export function App() {
     const events = new EventSource(
       `/api/runs/${encodeURIComponent(runId)}/events`,
     );
-    let lastGraphUpdate = 0;
-    events.onopen = () => setSseConnected(true);
+    let lastEvent = Date.now();
+    events.onopen = () => { lastEvent = Date.now(); setSseConnected(true); };
     events.onerror = () => setSseConnected(false);
+    const heartbeat = window.setInterval(() => {
+      if (Date.now() - lastEvent > 6000) setSseConnected(false);
+    }, 2000);
     events.addEventListener("progress", (event) => {
       try {
         const next = JSON.parse((event as MessageEvent).data) as CrawlRun;
+        lastEvent = Date.now();
+        setSseConnected(true);
         client.setQueryData(["run", runId], next);
-        if (Date.now() - lastGraphUpdate > 1200 || !activeRun(next.status)) {
-          lastGraphUpdate = Date.now();
-          void refreshQuerySnapshot(client, ["graph", runId]);
-          void client.invalidateQueries({ queryKey: ["runs"] });
-        }
       } catch {
         /* Polling remains available if the stream is interrupted. */
       }
     });
-    return () => events.close();
+    return () => { window.clearInterval(heartbeat); events.close(); };
   }, [runId, busy, client]);
   const create = useMutation({
     mutationFn: api.create,
@@ -869,6 +889,7 @@ export function App() {
                     }
                   >
                     <NetworkGraph
+                      runId={run!.id}
                       nodes={merged.nodes}
                       edges={merged.edges}
                       rootId={run.rootId}
@@ -1415,8 +1436,12 @@ export function App() {
               </div>
             </aside>
           </div>
-          <RelationshipScoresPanel key={`relationships:${run?.id ?? "no-run"}`} run={run} />
-          <GameScoresPanel key={run?.id ?? "no-run"} run={run} />
+          <DeferredPanel key={`relationships:${run?.id ?? "no-run"}`} id="relationship-scores" title="关系分层" description="查看共同好友、间接连接与群组带来的关系分数。">
+            <RelationshipScoresPanel run={run} />
+          </DeferredPanel>
+          <DeferredPanel key={`games:${run?.id ?? "no-run"}`} id="game-scores" title="游戏相关度" description="比较好友公开展示的游戏和游玩时长。">
+            <GameScoresPanel run={run} />
+          </DeferredPanel>
           <footer className="workspace-footer">
             <span>
               STEAMFINDER <i /> 让关系可见

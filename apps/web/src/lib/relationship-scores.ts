@@ -1,8 +1,15 @@
 import type { QueryClient } from "@tanstack/react-query";
 import type {
+  CrawlRun,
   RelationshipLayer,
   RelationshipScoreRow,
+  RelationshipScoreSummary,
 } from "../../../../packages/shared/src/index";
+import { scheduleQueryRefresh } from "./query-refresh";
+
+export function scheduleRelationshipScores(client: QueryClient, runId: string): Promise<void> {
+  return scheduleQueryRefresh(client, ["relationship-scores", runId]);
+}
 
 /** Cancel even the first pending fetch before requesting a newer run snapshot. */
 export async function refreshRelationshipScores(
@@ -11,6 +18,22 @@ export async function refreshRelationshipScores(
 ): Promise<void> {
   await client.cancelQueries({ queryKey: ["relationship-scores", runId] });
   await client.invalidateQueries({ queryKey: ["relationship-scores", runId] });
+}
+
+/** useQuery owns the first read; only later source revisions trigger a refresh. */
+export function createRelationshipRunSync(client: QueryClient, runId?: string) {
+  let previous: string | undefined;
+  return async (run?: CrawlRun): Promise<void> => {
+    if (!runId || run?.id !== runId) return;
+    const revision = JSON.stringify([run.updatedAt, run.status, run.nodeCount, run.edgeCount,
+      run.fetchedCount, run.privateCount, run.errorCount]);
+    if (revision === previous) return;
+    const initial = previous === undefined;
+    previous = revision;
+    if (initial) return;
+    if (["queued", "running"].includes(run.status)) await scheduleRelationshipScores(client, runId);
+    else await refreshRelationshipScores(client, runId);
+  };
 }
 
 export type ScoredRelationshipLayer = Exclude<RelationshipLayer, "unknown">;
@@ -45,9 +68,9 @@ const ringLimits: Record<ScoredRelationshipLayer, number> = {
 };
 
 /** Preserve precise Steam IDs and make ranking independent of input order or locale. */
-export function rankRelationshipScores(
-  rows: readonly RelationshipScoreRow[],
-): RelationshipScoreRow[] {
+export function rankRelationshipScores<T extends RelationshipScoreSummary>(
+  rows: readonly T[],
+): T[] {
   return [...rows].sort(
     (a, b) =>
       (b.score ?? -Infinity) - (a.score ?? -Infinity) ||
@@ -98,7 +121,7 @@ export function paginateRelationshipScores(
 }
 
 export interface RelationshipRingNode {
-  row: RelationshipScoreRow;
+  row: RelationshipScoreSummary;
   x: number;
   y: number;
   radius: number;
@@ -106,7 +129,7 @@ export interface RelationshipRingNode {
 
 /** Share the sample across layers while keeping each ring readable. */
 export function relationshipRingNodes(
-  rows: readonly RelationshipScoreRow[],
+  rows: readonly RelationshipScoreSummary[],
   limit = 100,
 ): RelationshipRingNode[] {
   const capacity = Math.max(

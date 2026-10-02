@@ -5,19 +5,19 @@ import type {
   GraphNode,
   GraphEdge,
 } from "../../../../packages/shared/src/index";
-import { depthRingPositions, graphInitials } from "../lib/graph";
+import {
+  createGraphTaskQueue,
+  planGraphUpdate,
+  type GraphPosition,
+  type GraphSnapshot,
+} from "../lib/graph-updates";
 import { Button } from "./ui";
 import { useProfileHover } from "./ProfileHoverCard";
 
-const colors = [
-  "#61d7c0",
-  "#8ba1f6",
-  "#f0bd77",
-  "#cd9aee",
-  "#78bddb",
-  "#b1d577",
-];
+type GraphCommand = "in" | "out" | "fit" | "focus";
+
 export default function NetworkGraph({
+  runId,
   nodes,
   edges,
   rootId,
@@ -26,6 +26,7 @@ export default function NetworkGraph({
   layout,
   onSelect,
 }: {
+  runId: string;
   nodes: GraphNode[];
   edges: GraphEdge[];
   rootId: string;
@@ -35,59 +36,46 @@ export default function NetworkGraph({
   onSelect: (id: string) => void;
 }) {
   const container = useRef<HTMLDivElement>(null);
-  const graphRef = useRef<Graph | null>(null);
+  const sessionRef = useRef<{
+    sync: () => void;
+    states: () => void;
+    command: (kind: GraphCommand) => void;
+  } | null>(null);
+  const latest = useRef({ nodes, edges, selectedId, highlightIds });
+  latest.current = { nodes, edges, selectedId, highlightIds };
   const selectRef = useRef(onSelect);
+  selectRef.current = onSelect;
   const hover = useProfileHover();
   const hoverRef = useRef(hover);
   hoverRef.current = hover;
-  const [ready, setReady] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  selectRef.current = onSelect;
+
   useEffect(() => {
-    if (!container.current || !nodes.length) return;
+    const host = container.current;
+    if (!host) return;
     let disposed = false;
     let rendered = false;
-    let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+    let dirty = false;
+    let dragging = false;
+    let hoveredId: string | null = null;
+    let commandId = 0;
+    let applied: GraphSnapshot = { nodes: [], edges: [] };
+    const positions = new Map<string, GraphPosition>();
     setError(null);
-    const positions = depthRingPositions(nodes, rootId);
+
+    // An old asynchronous render can finish safely in its own detached mount
+    // while a new run/layout starts; it never touches the new graph's canvas.
+    const mount = document.createElement("div");
+    mount.style.width = "100%";
+    mount.style.height = "100%";
+    host.appendChild(mount);
+    const { width, height } = host.getBoundingClientRect();
     const graph = new Graph({
-      container: container.current,
+      container: mount,
+      width,
+      height,
       animation: false,
-      autoFit: "view",
       padding: 60,
-      data: {
-        nodes: nodes.map((node) => ({
-          id: node.id,
-          data: { ...node },
-          style: {
-            ...(layout === "radial" ? positions.get(node.id) : {}),
-            size: node.id === rootId ? 62 : 36 + Math.min(node.degree, 15),
-            fill: "#17283a",
-            stroke:
-              node.fetchStatus === "private"
-                ? "#a78c68"
-                : colors[node.community % colors.length],
-            lineWidth: node.id === rootId ? 3 : 1.7,
-            labelText: node.name,
-            labelFill: "#b6c5d8",
-            labelFontSize: 11,
-            labelPlacement: "bottom",
-            labelMaxWidth: 150,
-            labelOpacity: nodes.length > 30 && node.id !== rootId ? 0 : 1,
-            iconText: node.avatar ? undefined : graphInitials(node.name),
-            iconSrc: node.avatar || undefined,
-            iconWidth: node.id === rootId ? 48 : 28,
-            iconHeight: node.id === rootId ? 48 : 28,
-            iconFontSize:
-              node.id === rootId || node.name.includes("演示玩家") ? 16 : 11,
-            iconFill: "#edf7ff",
-            halo: node.id === rootId,
-            haloFill: "#61d7c0",
-            haloFillOpacity: 0.09,
-          },
-        })),
-        edges: edges.map((edge) => ({ ...edge })),
-      },
       node: {
         type: "circle",
         state: {
@@ -114,7 +102,13 @@ export default function NetworkGraph({
       },
       edge: {
         type: "line",
-        style: { stroke: "#355269", lineWidth: 1, opacity: 0.5 },
+        style: {
+          stroke: "#355269",
+          lineWidth: 1,
+          opacity: 0.5,
+          // Edges are display-only; let pointer events reach the canvas for panning.
+          pointerEvents: "none",
+        },
         state: {
           highlight: { stroke: "#b8ed77", lineWidth: 2, opacity: 0.9 },
           dim: { opacity: 0.09 },
@@ -124,11 +118,105 @@ export default function NetworkGraph({
         layout === "radial"
           ? undefined
           : { type: layout, nodeSize: 58, preventOverlap: true },
-      behaviors: ["drag-canvas", "zoom-canvas", "drag-element"],
+      behaviors: [
+        "drag-canvas",
+        "zoom-canvas",
+        {
+          type: "drag-element",
+          // G6 also ends dragging on native blur/contextmenu, which do not
+          // emit node:dragend. Flush deferred data in all completion paths.
+          onFinish: () => {
+            dragging = false;
+            sync();
+          },
+        },
+      ],
     });
-    graphRef.current = graph;
+    const queue = createGraphTaskQueue((cause) => {
+      if (!disposed)
+        setError(cause instanceof Error ? cause.message : "图谱渲染失败");
+    });
+    const applyStates = async () => {
+      if (!rendered || disposed) return;
+      const { selectedId, highlightIds } = latest.current;
+      const highlight = new Set(highlightIds);
+      const states: Record<string, string[]> = {};
+      const includeChanged = (id: string, next: string[]) => {
+        const current = graph.getElementState(id);
+        if (
+          current.length !== next.length ||
+          current.some((state, index) => state !== next[index])
+        ) {
+          states[id] = next;
+        }
+      };
+      for (const node of applied.nodes) {
+        const next =
+          node.id === selectedId
+            ? ["selected"]
+            : highlight.has(node.id)
+              ? ["highlight"]
+              : highlight.size
+                ? ["dim"]
+                : [];
+        if (node.id === hoveredId) next.push("hover");
+        includeChanged(node.id, next);
+      }
+      for (const edge of applied.edges) {
+        includeChanged(
+          edge.id,
+          highlight.has(edge.source) && highlight.has(edge.target)
+            ? ["highlight"]
+            : highlight.size
+              ? ["dim"]
+              : [],
+        );
+      }
+      if (Object.keys(states).length)
+        await graph.setElementState(states, false);
+    };
+    const scheduleStates = () => {
+      void queue.enqueue("states", applyStates);
+    };
+    const sync = () => {
+      void queue.enqueue("data", async () => {
+        if (dragging) return;
+        const next = latest.current;
+        if (!rendered && !next.nodes.length) return;
+        if (rendered) {
+          for (const node of graph.getNodeData()) {
+            const [x, y] = graph.getElementPosition(node.id);
+            if (Number.isFinite(x) && Number.isFinite(y))
+              positions.set(node.id, { x, y });
+          }
+        }
+        const patch = planGraphUpdate(applied, next, rootId, layout, positions);
+        if (patch.changed) {
+          graph.removeData(patch.remove);
+          graph.addData(patch.add);
+          graph.updateData(patch.update);
+          applied = next;
+          dirty = true;
+        }
+        if (!rendered) {
+          await graph.render();
+          if (disposed) return;
+          rendered = true;
+          dirty = false;
+          await graph.fitView(undefined, false);
+        } else if (dirty) {
+          // draw updates elements without rerunning layout or fitting the camera.
+          await graph.draw();
+          dirty = false;
+        }
+        if (disposed) return;
+        await applyStates();
+        if (!disposed) setError(null);
+      });
+    };
     const showProfile = (id: string, immediate = false) => {
-      const node = nodes.find((item) => item.id === id);
+      if (!rendered || disposed) return;
+      const node = latest.current.nodes.find((item) => item.id === id);
       if (!node) return;
       const [x, y] = graph.getClientByCanvas(graph.getElementPosition(id));
       const radius =
@@ -146,6 +234,7 @@ export default function NetworkGraph({
       );
     };
     graph.on("node:click", (event) => {
+      if (disposed) return;
       const target = (event as IElementEvent).target;
       if (target?.id) {
         selectRef.current(String(target.id));
@@ -154,98 +243,76 @@ export default function NetworkGraph({
       }
     });
     graph.on("node:pointerenter", (event) => {
-      const id = String((event as IElementEvent).target.id);
-      if ((event as IElementEvent).pointerType !== "touch") showProfile(id);
-      void graph
-        .setElementState(id, [
-          ...graph.getElementState(id).filter((state) => state !== "hover"),
-          "hover",
-        ])
-        .catch(() => undefined);
+      if (disposed) return;
+      hoveredId = String((event as IElementEvent).target.id);
+      if ((event as IElementEvent).pointerType !== "touch")
+        showProfile(hoveredId);
+      scheduleStates();
     });
     graph.on("node:pointerleave", (event) => {
+      if (disposed) return;
       if ((event as IElementEvent).pointerType !== "touch")
         hoverRef.current.leave();
-      const id = String((event as IElementEvent).target.id);
-      void graph
-        .setElementState(
-          id,
-          graph.getElementState(id).filter((state) => state !== "hover"),
-        )
-        .catch(() => undefined);
+      if (hoveredId === String((event as IElementEvent).target.id))
+        hoveredId = null;
+      scheduleStates();
     });
     graph.on("canvas:click", () => hoverRef.current.close());
-    graph.on("node:dragstart", () => hoverRef.current.close());
+    graph.on("node:dragstart", () => {
+      dragging = true;
+      hoverRef.current.close();
+    });
     graph.on("canvas:dragstart", () => hoverRef.current.close());
     const observer = new ResizeObserver(() => {
-      if (disposed || !container.current) return;
-      const { width, height } = container.current.getBoundingClientRect();
-      if (width > 0 && height > 0) {
-        graph.setSize(width, height);
-        if (rendered) {
-          clearTimeout(resizeTimer);
-          resizeTimer = setTimeout(() => {
-            if (!disposed) void graph.fitView().catch(() => undefined);
-          }, 120);
-        }
-      }
-    });
-    observer.observe(container.current);
-    graph
-      .render()
-      .then(() => {
-        if (!disposed) {
-          rendered = true;
-          setReady((value) => value + 1);
-        }
-      })
-      .catch((cause: unknown) => {
-        if (!disposed)
-          setError(cause instanceof Error ? cause.message : "图谱渲染失败");
+      void queue.enqueue("resize", () => {
+        const { width, height } = host.getBoundingClientRect();
+        if (width > 0 && height > 0) graph.setSize(width, height);
       });
+    });
+    observer.observe(host);
+    sessionRef.current = {
+      sync,
+      states: scheduleStates,
+      command(kind) {
+        void queue.enqueue(`command-${commandId++}`, async () => {
+          if (!rendered) return;
+          const selected = latest.current.selectedId;
+          if (kind === "fit") await graph.fitView(undefined, false);
+          else if (kind === "focus") {
+            if (
+              selected &&
+              applied.nodes.some((node) => node.id === selected)
+            ) {
+              await graph.focusElement(selected, false);
+            }
+          } else
+            await graph.zoomTo(
+              graph.getZoom() * (kind === "in" ? 1.25 : 0.8),
+              false,
+            );
+        });
+      },
+    };
+    sync();
     return () => {
       disposed = true;
-      clearTimeout(resizeTimer);
       observer.disconnect();
-      graphRef.current = null;
+      sessionRef.current = null;
       hoverRef.current.close();
-      graph.destroy();
+      mount.remove();
+      // G6's render/draw resumes after await; destroying the runtime earlier
+      // would let those continuations access a destroyed canvas/model.
+      void queue.dispose(() => graph.destroy()).catch(() => undefined);
     };
-  }, [nodes, edges, rootId, layout]);
+  }, [runId, rootId, layout]);
+
   useEffect(() => {
-    const graph = graphRef.current;
-    if (!graph || !ready) return;
-    const highlight = new Set(highlightIds);
-    const states: Record<string, string[]> = {};
-    for (const node of nodes)
-      states[node.id] =
-        node.id === selectedId
-          ? ["selected"]
-          : highlight.has(node.id)
-            ? ["highlight"]
-            : highlight.size
-              ? ["dim"]
-              : [];
-    for (const edge of edges)
-      states[edge.id] =
-        highlight.has(edge.source) && highlight.has(edge.target)
-          ? ["highlight"]
-          : highlight.size
-            ? ["dim"]
-            : [];
-    void graph.setElementState(states).catch(() => undefined);
-  }, [selectedId, highlightIds, ready, nodes, edges]);
-  const command = (kind: "in" | "out" | "fit" | "focus") => {
-    const graph = graphRef.current;
-    if (!graph) return;
-    const action =
-      kind === "fit"
-        ? graph.fitView()
-        : kind === "focus" && selectedId
-          ? graph.focusElement(selectedId)
-          : graph.zoomTo(graph.getZoom() * (kind === "in" ? 1.25 : 0.8));
-    void action.catch(() => undefined);
-  };
+    sessionRef.current?.sync();
+  }, [nodes, edges]);
+  useEffect(() => {
+    sessionRef.current?.states();
+  }, [selectedId, highlightIds]);
+  const command = (kind: GraphCommand) => sessionRef.current?.command(kind);
   return (
     <>
       <div

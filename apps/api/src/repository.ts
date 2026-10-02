@@ -9,6 +9,7 @@ import { pool, transaction } from "./db.js";
 import { config } from "./config.js";
 import type { Player } from "./provider.js";
 import type pg from "pg";
+import { insertRunEdges } from "./run-edges.js";
 
 export class HttpError extends Error {
   constructor(
@@ -19,19 +20,26 @@ export class HttpError extends Error {
   }
 }
 const iso = (date: Date | null) => date?.toISOString() ?? null;
-export async function getRun(id: string): Promise<CrawlRun> {
-  const result = await pool.query(
-    `SELECT r.*, COALESCE(p.name,r.root_id) root_name,
-    (SELECT count(*)::int FROM run_nodes n WHERE n.run_id=r.id) node_count,
-    (SELECT count(*)::int FROM run_edges e WHERE e.run_id=r.id) edge_count,
-    (SELECT count(*)::int FROM run_nodes n WHERE n.run_id=r.id AND n.fetch_status='ok') fetched_count,
-    (SELECT count(*)::int FROM run_nodes n WHERE n.run_id=r.id AND n.fetch_status='private') private_count,
-    (SELECT count(*)::int FROM run_nodes n WHERE n.run_id=r.id AND n.fetch_status='error') error_count
-    FROM crawl_runs r LEFT JOIN players p ON p.mode=r.mode AND p.id=r.root_id WHERE r.id=$1 AND r.mode=$2`,
-    [id, config.mode],
-  );
-  const r = result.rows[0];
-  if (!r) throw new HttpError(404, "找不到该查询");
+// Restrict both aggregates to the selected runs and count all node states in one pass.
+const runStatistics = `
+  SELECT r.*, COALESCE(p.name,r.root_id) root_name,
+    COALESCE(n.node_count,0) node_count, COALESCE(e.edge_count,0) edge_count,
+    COALESCE(n.fetched_count,0) fetched_count, COALESCE(n.private_count,0) private_count,
+    COALESCE(n.error_count,0) error_count
+  FROM selected_runs r LEFT JOIN players p ON p.mode=r.mode AND p.id=r.root_id
+  LEFT JOIN (
+    SELECT run_id,count(*)::int node_count,
+      count(*) FILTER (WHERE fetch_status='ok')::int fetched_count,
+      count(*) FILTER (WHERE fetch_status='private')::int private_count,
+      count(*) FILTER (WHERE fetch_status='error')::int error_count
+    FROM run_nodes WHERE run_id IN (SELECT id FROM selected_runs) GROUP BY run_id
+  ) n ON n.run_id=r.id
+  LEFT JOIN (
+    SELECT run_id,count(*)::int edge_count FROM run_edges
+    WHERE run_id IN (SELECT id FROM selected_runs) GROUP BY run_id
+  ) e ON e.run_id=r.id`;
+
+function mapRun(r: pg.QueryResultRow): CrawlRun {
   return {
     id: r.id,
     rootId: r.root_id,
@@ -55,12 +63,21 @@ export async function getRun(id: string): Promise<CrawlRun> {
     completedAt: iso(r.completed_at),
   };
 }
+export async function getRun(id: string): Promise<CrawlRun> {
+  const { rows } = await pool.query(
+    `WITH selected_runs AS (SELECT * FROM crawl_runs WHERE id=$1 AND mode=$2) ${runStatistics}`,
+    [id, config.mode],
+  );
+  if (!rows[0]) throw new HttpError(404, "找不到该查询");
+  return mapRun(rows[0]);
+}
 export async function listRuns(): Promise<CrawlRun[]> {
   const { rows } = await pool.query(
-    "SELECT id FROM crawl_runs WHERE mode=$1 ORDER BY created_at DESC LIMIT 100",
+    `WITH selected_runs AS (SELECT * FROM crawl_runs WHERE mode=$1 ORDER BY created_at DESC LIMIT 100)
+    ${runStatistics} ORDER BY r.created_at DESC`,
     [config.mode],
   );
-  return Promise.all(rows.map((row) => getRun(row.id)));
+  return rows.map(mapRun);
 }
 export async function createRun(
   rootId: string,
@@ -107,12 +124,15 @@ export async function createRun(
 }
 export async function getGraphData(
   id: string,
+  validatedRun?: CrawlRun,
 ): Promise<{
   nodes: GraphNode[];
   edges: GraphEdge[];
   fullyRepresented: Set<string>;
 }> {
-  const run = await getRun(id);
+  const run = validatedRun ?? await getRun(id);
+  if (run.id !== id || run.mode !== config.mode)
+    throw new HttpError(404, "找不到该查询");
   const [nr, er] = await Promise.all([
     pool.query(
       `SELECT n.player_id id,n.depth,p.name,p.avatar,p.profile_url,n.fetch_status status,n.fetched_at,n.friend_count,NOT EXISTS(SELECT 1 FROM run_friend_observations o WHERE o.run_id=$1 AND o.owner_id=n.player_id AND NOT EXISTS(SELECT 1 FROM run_nodes other WHERE other.run_id=$1 AND other.player_id=o.friend_id)) represented FROM run_nodes n JOIN players p ON p.mode=$2 AND p.id=n.player_id WHERE n.run_id=$1 ORDER BY n.depth,n.player_id`,
@@ -150,11 +170,16 @@ export async function putPlayers(
   players: Player[],
   checkpoint?: { runId: string; ids: string[] },
 ): Promise<void> {
+  // Match sequential upserts when a provider returns a duplicate ID: the last wins.
+  const unique = [...new Map(players.map((player) => [player.id, player])).values()];
   await transaction(async (client) => {
-    for (const player of players)
+    if (unique.length)
       await client.query(
-        `INSERT INTO players(mode,id,name,avatar,profile_url,summary_at) VALUES($1,$2,$3,$4,$5,now()) ON CONFLICT(mode,id) DO UPDATE SET name=EXCLUDED.name,avatar=EXCLUDED.avatar,profile_url=EXCLUDED.profile_url,summary_at=now()`,
-        [config.mode, player.id, player.name, player.avatar, player.profileUrl],
+        `INSERT INTO players(mode,id,name,avatar,profile_url,summary_at)
+        SELECT $1,id,name,avatar,profile_url,now()
+        FROM unnest($2::text[],$3::text[],$4::text[],$5::text[]) AS batch(id,name,avatar,profile_url)
+        ON CONFLICT(mode,id) DO UPDATE SET name=EXCLUDED.name,avatar=EXCLUDED.avatar,profile_url=EXCLUDED.profile_url,summary_at=now()`,
+        [config.mode, unique.map((p) => p.id), unique.map((p) => p.name), unique.map((p) => p.avatar), unique.map((p) => p.profileUrl)],
       );
     if (checkpoint)
       await client.query(
@@ -180,12 +205,26 @@ async function snapshotList(
     `UPDATE run_nodes n SET observed=true,fetch_status=f.status,fetched_at=f.fetched_at,friend_count=f.friend_count FROM friend_lists f WHERE n.run_id=$1 AND n.player_id=$3 AND f.mode=$2 AND f.owner_id=$3`,
     [runId, config.mode, owner],
   );
+  // Refresh only this owner's edges, retaining any reverse supporting observation.
+  await client.query(
+    `DELETE FROM run_edges e WHERE e.run_id=$1 AND (e.source=$2 OR e.target=$2)
+    AND NOT EXISTS(SELECT 1 FROM run_friend_observations o WHERE o.run_id=$1
+      AND ((o.owner_id=e.source AND o.friend_id=e.target) OR (o.owner_id=e.target AND o.friend_id=e.source)))`,
+    [runId, owner],
+  );
+  await insertRunEdges(client, runId, [owner]);
+  // Late results can arrive after cancellation; advance the serialized version
+  // even when two snapshot writes commit within the same millisecond.
+  await client.query(
+    "UPDATE crawl_runs SET updated_at=GREATEST(clock_timestamp(),updated_at + interval '1 millisecond') WHERE id=$1",
+    [runId],
+  );
 }
 export async function captureList(runId: string, owner: string): Promise<void> {
   await transaction(async (client) => {
     await snapshotList(client, runId, owner);
     await client.query(
-      "UPDATE crawl_runs SET cache_hits=cache_hits+1,updated_at=now() WHERE id=$1",
+      "UPDATE crawl_runs SET cache_hits=cache_hits+1 WHERE id=$1",
       [runId],
     );
   });

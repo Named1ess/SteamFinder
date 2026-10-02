@@ -32,6 +32,60 @@ function snapshot(runId = "run-1"): RunGroupsResponse {
 }
 
 describe("group evidence refresh", () => {
+  it("does not interrupt an initial score read when the first group snapshot has no job", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    let resolveOld!: (value: number) => void;
+    const old = new Promise<number>(resolve => { resolveOld = resolve; });
+    let requests = 0, aborted = false;
+    const observer = new QueryObserver(client, {
+      queryKey: ["relationship-scores", "run-1", "center", "page"],
+      queryFn: ({ signal }) => {
+        signal.addEventListener("abort", () => { aborted = true; });
+        return ++requests === 1 ? old : Promise.resolve(60);
+      },
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    try {
+      const sync = createGroupScoreSync(client, "run-1");
+      await sync({ ...snapshot(), job: null, updatedAt: null });
+      expect(requests).toBe(1);
+      expect(aborted).toBe(false);
+      const finish = sync(snapshot());
+      resolveOld(10);
+      await finish;
+      expect(observer.getCurrentResult().data).toBe(60);
+      expect(requests).toBe(2);
+    } finally { unsubscribe(); client.clear(); }
+  });
+
+  it("lets an active score read finish and combines repeated progress into one follow-up", async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+    let resolveOld!: (value: number) => void;
+    const old = new Promise<number>(resolve => { resolveOld = resolve; });
+    let requests = 0, cancelled = false;
+    const observer = new QueryObserver(client, {
+      queryKey: ["relationship-scores", "run-1", "center", "page"],
+      queryFn: ({ signal }) => {
+        signal.addEventListener("abort", () => { cancelled = true; });
+        return ++requests === 1 ? old : Promise.resolve(60);
+      },
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    try {
+      const sync = createGroupScoreSync(client, "run-1");
+      const current = snapshot();
+      current.job!.status = "running";
+      const first = sync(current);
+      const second = sync({ ...current, updatedAt: "2026-10-03T00:00:02.000Z" });
+      await Promise.resolve();
+      expect(cancelled).toBe(false);
+      resolveOld(55);
+      await Promise.all([first, second]);
+      expect(observer.getCurrentResult().data).toBe(60);
+      expect(requests).toBe(2);
+    } finally { unsubscribe(); client.clear(); }
+  });
+
   it("replaces initial pending scores when a group job finishes without polling", async () => {
     const client = new QueryClient({
       defaultOptions: { queries: { retry: false, gcTime: Infinity } },

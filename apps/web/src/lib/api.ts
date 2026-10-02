@@ -9,6 +9,10 @@ import type {
   PlayerDetailsSnapshot,
   PlayerSearchResponse,
   RelationshipScoresResponse,
+  RelationshipScorePage,
+  RelationshipOverview,
+  RelationshipScoreDetail,
+  RelationshipLayer,
   RunGroupsResponse,
 } from "../../../../packages/shared/src/index";
 
@@ -90,6 +94,21 @@ export const api = {
   relationshipScores: (id: string, center: string, signal?: AbortSignal) =>
     request<RelationshipScoresResponse>(
       `/runs/${encodeURIComponent(id)}/relationship-scores?${new URLSearchParams({ center })}`,
+      { signal },
+    ),
+  relationshipPage: (id: string, center: string, options: { page: number; q: string; layer: RelationshipLayer | "all" }, signal?: AbortSignal) =>
+    request<RelationshipScorePage>(
+      `/runs/${encodeURIComponent(id)}/relationship-scores/page?${new URLSearchParams({ center, page: String(options.page), q: options.q, layer: options.layer, limit: "30" })}`,
+      { signal },
+    ),
+  relationshipOverview: (id: string, center: string, signal?: AbortSignal) =>
+    request<RelationshipOverview>(
+      `/runs/${encodeURIComponent(id)}/relationship-scores/overview?${new URLSearchParams({ center })}`,
+      { signal },
+    ),
+  relationshipDetail: (id: string, center: string, playerId: string, signal?: AbortSignal) =>
+    request<RelationshipScoreDetail>(
+      `/runs/${encodeURIComponent(id)}/relationship-scores/players/${encodeURIComponent(playerId)}?${new URLSearchParams({ center })}`,
       { signal },
     ),
   runGroups: (id: string, signal?: AbortSignal) =>

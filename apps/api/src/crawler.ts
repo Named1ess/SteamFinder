@@ -11,6 +11,7 @@ import {
   captureList,
 } from "./repository.js";
 import { steamRequest, BudgetError, CancelledError } from "./requests.js";
+import { insertRunEdges } from "./run-edges.js";
 
 export async function crawl(id: string, provider: Provider): Promise<void> {
   const lock = await pool.connect();
@@ -113,10 +114,6 @@ export async function crawl(id: string, provider: Provider): Promise<void> {
           }
         }
       }
-      const neighbors = await pool.query(
-        "SELECT friend_id FROM run_friend_observations WHERE run_id=$1 AND owner_id=$2 ORDER BY friend_id",
-        [id, node.player_id],
-      );
       const fullyExpanded = await transaction(async (client) => {
         const locked = await client.query(
           "SELECT status,max_nodes FROM crawl_runs WHERE id=$1 FOR UPDATE",
@@ -124,40 +121,32 @@ export async function crawl(id: string, provider: Provider): Promise<void> {
         );
         if (locked.rows[0]?.status !== "running") throw new CancelledError();
         const existing = await client.query(
-          "SELECT player_id FROM run_nodes WHERE run_id=$1",
+          "SELECT count(*)::int count FROM run_nodes WHERE run_id=$1",
           [id],
         );
-        const known = new Set<string>(existing.rows.map((r) => r.player_id));
-        let complete = true;
-        for (const { friend_id: friend } of neighbors.rows) {
-          if (known.has(friend)) continue;
-          if (known.size >= locked.rows[0].max_nodes) {
-            complete = false;
-            continue;
-          }
+        const capacity = Math.max(0, locked.rows[0].max_nodes - existing.rows[0].count);
+        const neighbors = await client.query(
+          `SELECT o.friend_id FROM run_friend_observations o WHERE o.run_id=$1 AND o.owner_id=$2
+          AND NOT EXISTS(SELECT 1 FROM run_nodes n WHERE n.run_id=$1 AND n.player_id=o.friend_id)
+          ORDER BY o.friend_id LIMIT $3`,
+          [id, node.player_id, capacity + 1],
+        );
+        const complete = neighbors.rows.length <= capacity;
+        const admitted = neighbors.rows.slice(0, capacity).map((row) => row.friend_id as string);
+        if (admitted.length) {
           await client.query(
-            `INSERT INTO players(mode,id,name,profile_url) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
-            [
-              config.mode,
-              friend,
-              config.mode === "demo"
-                ? `演示玩家 · 虚构 ${friend.slice(-4)}`
-                : friend,
-              `https://steamcommunity.com/profiles/${friend}`,
-            ],
+            `INSERT INTO players(mode,id,name,profile_url)
+            SELECT $1,id,CASE WHEN $1='demo' THEN '演示玩家 · 虚构 ' || right(id,4) ELSE id END,
+              'https://steamcommunity.com/profiles/' || id FROM unnest($2::text[]) AS discovered(id)
+            ON CONFLICT DO NOTHING`,
+            [config.mode, admitted],
           );
           await client.query(
-            "INSERT INTO run_nodes(run_id,player_id,depth) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",
-            [id, friend, node.depth + 1],
+            "INSERT INTO run_nodes(run_id,player_id,depth) SELECT $1,unnest($2::text[]),$3 ON CONFLICT DO NOTHING",
+            [id, admitted, node.depth + 1],
           );
-          known.add(friend);
         }
-        // Snapshot all known supported edges whose endpoints are in this run.
-        await client.query("DELETE FROM run_edges WHERE run_id=$1", [id]);
-        await client.query(
-          `INSERT INTO run_edges(run_id,source,target) SELECT DISTINCT $1,least(o.owner_id,o.friend_id),greatest(o.owner_id,o.friend_id) FROM run_friend_observations o JOIN run_nodes a ON a.run_id=$1 AND a.player_id=o.owner_id JOIN run_nodes b ON b.run_id=$1 AND b.player_id=o.friend_id WHERE o.run_id=$1 AND o.owner_id<>o.friend_id ON CONFLICT DO NOTHING`,
-          [id],
-        );
+        await insertRunEdges(client, id, [node.player_id, ...admitted]);
         await client.query(
           "UPDATE run_nodes SET expanded=$3 WHERE run_id=$1 AND player_id=$2",
           [id, node.player_id, complete],

@@ -111,6 +111,26 @@ export interface RelationshipScoresResponse {
   }[];
   rows: RelationshipScoreRow[];
 }
+/** Ranking and ring payloads intentionally omit per-player evidence. */
+export type RelationshipScoreSummary = Pick<
+  RelationshipScoreRow,
+  "player" | "score" | "layer" | "distance" | "isDirect" | "mutualCount" | "networkScore"
+>;
+export type RelationshipScoresMetadata = Omit<RelationshipScoresResponse, "rows">;
+export interface RelationshipScorePage extends RelationshipScoresMetadata {
+  rows: RelationshipScoreSummary[];
+  page: number;
+  pages: number;
+  limit: number;
+  /** Matching players across the entire saved graph. */
+  total: number;
+}
+export interface RelationshipOverview extends RelationshipScoresMetadata {
+  rows: RelationshipScoreSummary[];
+}
+export interface RelationshipScoreDetail extends RelationshipScoresMetadata {
+  row: RelationshipScoreRow;
+}
 export interface GraphStats {
   layers: { depth: number; count: number }[];
   communities: { id: number; size: number }[];

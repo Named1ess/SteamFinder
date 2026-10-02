@@ -8,6 +8,7 @@ import {
   primaryKey,
   date,
   jsonb,
+  index,
 } from "drizzle-orm/pg-core";
 const time = (name: string) => timestamp(name, { withTimezone: true });
 export const players = pgTable(
@@ -94,7 +95,10 @@ export const runObservations = pgTable(
     ownerId: text("owner_id").notNull(),
     friendId: text("friend_id").notNull(),
   },
-  (t) => [primaryKey({ columns: [t.runId, t.ownerId, t.friendId] })],
+  (t) => [
+    primaryKey({ columns: [t.runId, t.ownerId, t.friendId] }),
+    index("run_observations_friend").on(t.runId, t.friendId),
+  ],
 );
 export const runEdges = pgTable(
   "run_edges",
@@ -105,7 +109,10 @@ export const runEdges = pgTable(
     source: text("source").notNull(),
     target: text("target").notNull(),
   },
-  (t) => [primaryKey({ columns: [t.runId, t.source, t.target] })],
+  (t) => [
+    primaryKey({ columns: [t.runId, t.source, t.target] }),
+    index("run_edges_target").on(t.runId, t.target),
+  ],
 );
 export const budgets = pgTable("request_budgets", {
   mode: text("mode").primaryKey(),

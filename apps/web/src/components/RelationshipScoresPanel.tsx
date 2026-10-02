@@ -20,16 +20,15 @@ import type {
   RelationshipLayer,
   RelationshipScoreRow,
   RelationshipScoresResponse,
+  RelationshipScoreSummary,
+  RelationshipScoresMetadata,
 } from "../../../../packages/shared/src/index";
 import { api } from "../lib/api";
-import { activeRun, initials } from "../lib/graph";
+import { initials } from "../lib/graph";
 import { createGroupScoreSync } from "../lib/group-collection";
 import {
-  filterRelationshipScores,
   layerColors,
-  paginateRelationshipScores,
-  rankRelationshipScores,
-  refreshRelationshipScores,
+  createRelationshipRunSync,
   relationshipRingNodes,
 } from "../lib/relationship-scores";
 import { PlayerCombobox } from "./PlayerCombobox";
@@ -77,8 +76,8 @@ function RelationshipRings({
   selectedId,
   onSelect,
 }: {
-  data: RelationshipScoresResponse;
-  rows: RelationshipScoreRow[];
+  data: RelationshipScoresMetadata;
+  rows: RelationshipScoreSummary[];
   layer: RelationshipLayer | "all";
   selectedId?: string;
   onSelect: (id: string) => void;
@@ -170,7 +169,7 @@ function RelationshipRings({
             }}
           >
             <title>
-              {row.player.name} · {scoreText(row.score)} 分 · {row.distance} 跳
+              {`${row.player.name} · ${scoreText(row.score)} 分 · ${row.distance} 跳`}
             </title>
             <circle cx={x} cy={y} r={12} className="relationship-node-target" />
             <circle
@@ -200,7 +199,7 @@ function RelationshipRings({
       </svg>
       <div className="relationship-map-caption">
         <span>
-          <i /> 展示 {format(nodes.length)} 位，完整 {format(rows.length)}{" "}
+          <i /> 展示 {format(nodes.length)} 位，完整 {format(data.totalPlayers)}{" "}
           位均可搜索
         </span>
         <span>
@@ -270,9 +269,13 @@ function GroupEvidence({ row }: { row: RelationshipScoreRow }) {
 function RelationshipDetail({
   row,
   layers,
+  refreshError,
+  onRetry,
 }: {
   row: RelationshipScoreRow;
   layers: RelationshipScoresResponse["layers"];
+  refreshError?: string;
+  onRetry?: () => void;
 }) {
   const networkScore = row.networkScore === undefined ? row.score : row.networkScore;
   const groupBonus = row.groups?.contribution ?? 0;
@@ -304,6 +307,12 @@ function RelationshipDetail({
   ];
   return (
     <aside className="relationship-detail" aria-label="所选玩家的关系评分解释">
+      {refreshError && (
+        <div className="relationship-notice" role="alert">
+          <p>{refreshError}。显示上次成功读取的详情，可能与最新排行不同。</p>
+          <Button variant="ghost" size="sm" onClick={onRetry}>重试评分解释</Button>
+        </div>
+      )}
       <div className="relationship-detail-heading">
         <PlayerAvatar player={row.player} />
         <div>
@@ -429,55 +438,68 @@ export function RelationshipScoresPanel({ run }: { run?: CrawlRun }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [layer, setLayer] = useState<RelationshipLayer | "all">("all");
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [page, setPage] = useState(0);
   const [showFormula, setShowFormula] = useState(false);
   const syncGroupScores = useMemo(
     () => createGroupScoreSync(client, run?.id),
     [client, run?.id],
   );
+  const syncRunScores = useMemo(
+    () => createRelationshipRunSync(client, run?.id),
+    [client, run?.id],
+  );
   const query = useQuery({
-    queryKey: ["relationship-scores", run?.id, centerId],
-    queryFn: ({ signal }) => api.relationshipScores(run!.id, centerId, signal),
+    queryKey: ["relationship-scores", run?.id, centerId, "page", page, debouncedSearch, layer],
+    queryFn: ({ signal }) => api.relationshipPage(run!.id, centerId, { page, q: debouncedSearch, layer }, signal),
     enabled: !!run && !!centerId,
-    refetchInterval: activeRun(run?.status) ? 2500 : false,
+  });
+  const overviewQuery = useQuery({
+    queryKey: ["relationship-scores", run?.id, centerId, "overview"],
+    queryFn: ({ signal }) => api.relationshipOverview(run!.id, centerId, signal),
+    enabled: !!run && !!centerId,
   });
   useEffect(() => {
-    if (run?.id) void refreshRelationshipScores(client, run.id);
+    const timer = setTimeout(() => setDebouncedSearch(search), 200);
+    return () => clearTimeout(timer);
+  }, [search]);
+  useEffect(() => {
+    void syncRunScores(run);
   }, [
-    client,
+    syncRunScores,
     run?.id,
     run?.nodeCount,
     run?.edgeCount,
     run?.fetchedCount,
+    run?.privateCount,
+    run?.errorCount,
     run?.status,
     run?.updatedAt,
   ]);
   // Editing clears the committed ID immediately; a previous center's cache is never rendered.
-  const data =
+  const pageData =
     centerId &&
     query.data?.center.id === centerId &&
     query.data.runId === run?.id
       ? query.data
       : undefined;
-  const rows = useMemo(
-    () => rankRelationshipScores(data?.rows ?? []),
-    [data?.rows],
-  );
-  const filtered = useMemo(
-    () => filterRelationshipScores(rows, search, layer),
-    [rows, search, layer],
-  );
-  const pagination = useMemo(
-    () => paginateRelationshipScores(filtered, page),
-    [filtered, page],
-  );
-  const selected =
-    rows.find((row) => row.player.id === selectedId) ?? filtered[0] ?? rows[0];
+  const overview = centerId && overviewQuery.data?.center.id === centerId && overviewQuery.data.runId === run?.id ? overviewQuery.data : undefined;
+  const data = pageData ?? overview;
+  const rows = overview?.rows ?? [];
+  const pagination = pageData ?? { rows: [], page, pages: 1, total: 0, limit: 30 };
+  const selectedPlayerId = selectedId ?? pageData?.rows[0]?.player.id ?? rows[0]?.player.id;
+  const detailQuery = useQuery({
+    queryKey: ["relationship-scores", run?.id, centerId, "detail", selectedPlayerId],
+    queryFn: ({ signal }) => api.relationshipDetail(run!.id, centerId, selectedPlayerId!, signal),
+    enabled: !!run && !!centerId && !!selectedPlayerId,
+  });
+  const selected = detailQuery.data?.runId === run?.id && detailQuery.data?.center.id === centerId && detailQuery.data?.row.player.id === selectedPlayerId ? detailQuery.data.row : undefined;
   const changeCenter = (id: string) => {
     setCenterId(id);
     setSelectedId(null);
     setLayer("all");
     setSearch("");
+    setDebouncedSearch("");
     setPage(0);
   };
   const chooseLayer = (id: RelationshipLayer | "all") => {
@@ -592,14 +614,14 @@ export function RelationshipScoresPanel({ run }: { run?: CrawlRun }) {
         </div>
       </div>
       <GroupCollectionPanel run={run} onSnapshot={syncGroupScores} />
-      {query.isError && centerId && (
+      {(query.isError || overviewQuery.isError) && centerId && (
         <div className="relationship-notice" role="alert">
           <CircleHelp size={15} />
-          <span>{query.error.message}</span>
+          <span>{query.error?.message ?? overviewQuery.error?.message}</span>
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => void query.refetch()}
+            onClick={() => { void query.refetch(); void overviewQuery.refetch(); }}
           >
             重试读取
           </Button>
@@ -625,7 +647,7 @@ export function RelationshipScoresPanel({ run }: { run?: CrawlRun }) {
               : "全部分析均在已有采集数据上完成。"}
           </span>
         </div>
-      ) : data && !rows.length ? (
+      ) : data && !data.totalPlayers ? (
         <div className="relationship-empty">
           <Users size={28} />
           <strong>当前网络中还没有其他玩家</strong>
@@ -668,24 +690,29 @@ export function RelationshipScoresPanel({ run }: { run?: CrawlRun }) {
               data={data}
               rows={rows}
               layer={layer}
-              selectedId={selected?.player.id}
+              selectedId={selectedPlayerId}
               onSelect={setSelectedId}
             />
-            {selected && (
-              <RelationshipDetail row={selected} layers={data.layers} />
-            )}
+            {selected ? (
+              <RelationshipDetail row={selected} layers={data.layers} refreshError={detailQuery.isError ? detailQuery.error.message : undefined} onRetry={() => void detailQuery.refetch()} />
+            ) : selectedPlayerId ? (
+              <aside className="relationship-detail" role={detailQuery.isError ? "alert" : "status"}>
+                {detailQuery.isError ? <><p>{detailQuery.error.message}</p><Button variant="ghost" size="sm" onClick={() => void detailQuery.refetch()}>重试评分解释</Button></> : <><LoaderCircle size={18} className="spin" /><p>正在读取评分解释</p></>}
+              </aside>
+            ) : null}
           </div>
           <div className="relationship-ranking">
             <div className="relationship-ranking-heading">
               <div>
                 <h3>全部玩家排行</h3>
-                <span>按关系分数从高到低 · 共 {format(rows.length)} 位</span>
+                <span>按关系分数从高到低 · 共 {format(data.totalPlayers)} 位</span>
               </div>
               <label className="relationship-search">
                 <Search size={14} />
                 <Input
                   aria-label="搜索关系排行中的玩家"
                   placeholder="搜索昵称或 Steam ID"
+                  maxLength={200}
                   value={search}
                   onChange={(event) => {
                     setSearch(event.target.value);
@@ -708,7 +735,7 @@ export function RelationshipScoresPanel({ run }: { run?: CrawlRun }) {
                 {layer === "all"
                   ? "包含暂无已知路径的玩家"
                   : data.layers.find((item) => item.id === layer)?.label}{" "}
-                · {format(filtered.length)} 位符合条件
+                · {pageData ? format(pageData.total) : "读取中"} 位符合条件
               </span>
             </div>
             <div className="relationship-ranking-labels" aria-hidden="true">
@@ -723,7 +750,7 @@ export function RelationshipScoresPanel({ run }: { run?: CrawlRun }) {
                   key={row.player.id}
                   className={cn(
                     "relationship-ranking-row",
-                    selected?.player.id === row.player.id && "selected",
+                    selectedPlayerId === row.player.id && "selected",
                   )}
                 >
                   <span className="relationship-row-avatar">
@@ -732,7 +759,7 @@ export function RelationshipScoresPanel({ run }: { run?: CrawlRun }) {
                   <button
                     type="button"
                     className="relationship-row-select"
-                    aria-pressed={selected?.player.id === row.player.id}
+                    aria-pressed={selectedPlayerId === row.player.id}
                     aria-label={`查看 ${row.player.name} 的评分解释，${row.score === null ? "暂无已知路径" : `${scoreText(row.score)} 分`}`}
                     onClick={() => setSelectedId(row.player.id)}
                   >
@@ -773,16 +800,16 @@ export function RelationshipScoresPanel({ run }: { run?: CrawlRun }) {
               ))}
               {!pagination.rows.length && (
                 <div className="relationship-no-matches">
-                  没有符合条件的玩家，试试其他昵称或层级。
+                  {query.isPending ? "正在读取排行" : query.isError ? "排行读取失败，请重试。" : "没有符合条件的玩家，试试其他昵称或层级。"}
                 </div>
               )}
             </div>
             <div className="relationship-pagination">
               <span>
-                {filtered.length
-                  ? `${pagination.page * 30 + 1}–${Math.min((pagination.page + 1) * 30, filtered.length)}`
+                {pagination.total
+                  ? `${pagination.page * 30 + 1}–${Math.min((pagination.page + 1) * 30, pagination.total)}`
                   : "0"}{" "}
-                / {format(filtered.length)} 位
+                / {format(pagination.total)} 位
               </span>
               <span>
                 第 {pagination.page + 1} / {pagination.pages} 页
@@ -791,7 +818,7 @@ export function RelationshipScoresPanel({ run }: { run?: CrawlRun }) {
                 variant="ghost"
                 size="icon"
                 aria-label="关系排行上一页"
-                disabled={pagination.page === 0}
+                disabled={!pageData || pagination.page === 0}
                 onClick={() => setPage(pagination.page - 1)}
               >
                 <ChevronLeft size={15} />
@@ -800,7 +827,7 @@ export function RelationshipScoresPanel({ run }: { run?: CrawlRun }) {
                 variant="ghost"
                 size="icon"
                 aria-label="关系排行下一页"
-                disabled={pagination.page >= pagination.pages - 1}
+                disabled={!pageData || pagination.page >= pagination.pages - 1}
                 onClick={() => setPage(pagination.page + 1)}
               >
                 <ChevronRight size={15} />
