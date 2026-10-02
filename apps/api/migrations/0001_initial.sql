@@ -122,3 +122,12 @@ CREATE TABLE IF NOT EXISTS group_collection_players (
 CREATE INDEX IF NOT EXISTS group_job_history ON group_collection_jobs(mode,run_id,created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS group_job_active ON group_collection_jobs(mode,run_id) WHERE status IN ('queued','running');
 CREATE INDEX IF NOT EXISTS group_job_pending ON group_collection_players(job_id,is_root DESC,depth,player_id) WHERE NOT processed;
+CREATE TABLE IF NOT EXISTS saved_graph_views (
+  id uuid PRIMARY KEY,
+  run_id uuid NOT NULL REFERENCES crawl_runs(id) ON DELETE CASCADE,
+  name text NOT NULL CHECK (char_length(name) BETWEEN 1 AND 60),
+  state jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS saved_graph_views_run ON saved_graph_views(run_id,updated_at DESC);

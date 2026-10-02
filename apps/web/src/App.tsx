@@ -37,6 +37,11 @@ import type {
   CrawlRun,
   GraphNode,
   GraphResponse,
+  GraphFocus,
+  GraphViewState,
+  GraphViewportSnapshot,
+  PlayerAnnotation,
+  SavedGraphView,
 } from "../../../packages/shared/src/index";
 import { DEFAULT_ROOT } from "../../../packages/shared/src/index";
 import { api } from "./lib/api";
@@ -52,6 +57,9 @@ import {
 } from "./lib/graph";
 import { Badge, Button, Input, cn } from "./components/ui";
 import { DeferredPanel } from "./components/DeferredPanel";
+import { GraphExplorationTools, GraphPlayerNotes } from "./components/GraphExplorationTools";
+import type { NetworkGraphHandle } from "./components/NetworkGraph";
+import { projectCommunities } from "./lib/graph-exploration";
 import { PlayerCombobox } from "./components/PlayerCombobox";
 import {
   ProfileHoverProvider,
@@ -173,9 +181,20 @@ export function App() {
   const [layout, setLayout] = useState("radial");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const graphHandle = useRef<NetworkGraphHandle>(null);
+  const activeRunId = useRef(runId);
+  activeRunId.current = runId;
+  type ExplorationState = { runId: string | null; focus: GraphFocus | null; collapsed: number[]; annotations: Record<string, PlayerAnnotation>; restore?: { key: string; snapshot: GraphViewportSnapshot } };
+  const emptyExploration = (): ExplorationState => ({ runId, focus: null, collapsed: [], annotations: {} });
+  const [exploration, setExploration] = useState<ExplorationState>(emptyExploration);
+  useEffect(() => setExploration(previous => previous.runId === runId ? previous : emptyExploration()), [runId]);
+  const explored = exploration.runId === runId ? exploration : emptyExploration();
+  const { focus, collapsed, annotations } = explored;
+  const updateExploration = (change: Partial<ExplorationState>) => setExploration(previous => ({ ...(previous.runId === runId ? previous : emptyExploration()), ...change, runId }));
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const latestAnalysisSelection = useRef({ runId, from, to });
+  const analysisGeneration = useRef(0);
   latestAnalysisSelection.current = { runId, from, to };
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
   const [resumeNodes, setResumeNodes] = useState(2000);
@@ -226,7 +245,7 @@ export function App() {
     void scheduleQueryRefresh(client, ["runs"]);
   }, [client, run?.id, run?.updatedAt, run?.status, run?.nodeCount, run?.edgeCount, run?.fetchedCount, run?.privateCount, run?.errorCount]);
   const graphQuery = useQuery<GraphResponse>({
-    queryKey: ["graph", runId, displayLimit, displayDepth],
+    queryKey: ["graph", runId, displayLimit, displayDepth, focus?.playerId, focus?.hops],
     // Keep the canvas mounted while changing filters, without showing another run.
     placeholderData: (previous, previousQuery) =>
       previousQuery?.queryKey[1] === runId ? previous : undefined,
@@ -236,6 +255,7 @@ export function App() {
         displayLimit,
         Math.min(displayDepth, run?.depth ?? 3),
         signal,
+        focus,
       ),
     enabled: !!run,
     // The run query and SSE share the version-driven refresh above.
@@ -266,6 +286,35 @@ export function App() {
         : matches.map((node) => node.id),
     [analysis, matches, from, to],
   );
+  const protectedIds = useMemo(() => [...new Set([run?.rootId, selectedId, focus?.playerId, ...highlights].filter((id): id is string => !!id))], [run?.rootId, selectedId, focus?.playerId, highlights]);
+  const projection = useMemo(() => projectCommunities(merged.nodes, merged.edges, collapsed, protectedIds), [merged.nodes, merged.edges, collapsed, protectedIds]);
+  const graphReady = !!run && !!graph && !graphQuery.isFetching && !graphQuery.isPlaceholderData && !graphQuery.isError;
+  const graphViewRevision = JSON.stringify([graph?.focus?.playerId, graph?.focus?.hops, projection.communities.filter(group => group.collapsed).map(group => group.id)]);
+  const captureRevision = useMemo(() => ({}), [runId, layout, displayDepth, displayLimit, selectedId, focus, collapsed, annotations, search, analysis, projection.nodes, projection.edges]);
+  const latestCaptureRevision = useRef(captureRevision);
+  latestCaptureRevision.current = captureRevision;
+  const focusGraph = (next: GraphFocus | null) => {
+    analysisGeneration.current++;
+    updateExploration({ focus: next, restore: undefined });
+    if (next) setSelectedId(next.playerId);
+    setAnalysis(null); setSearch("");
+  };
+  const captureGraphView = async (): Promise<GraphViewState> => {
+    if (!graphReady || !run) throw new Error("图谱仍在读取，请稍后保存");
+    if (analysis) throw new Error("请先清除连接分析结果，再保存当前视图");
+    const snapshot = await graphHandle.current?.capture();
+    if (!snapshot || activeRunId.current !== run.id) throw new Error("图谱已切换或尚未准备好，请重新保存");
+    if (latestCaptureRevision.current !== captureRevision) throw new Error("图谱设置或数据已变化，请重新保存当前视图");
+    return { version: 1, layout: layout as GraphViewState["layout"], displayDepth: Math.min(displayDepth, run.depth), displayLimit, selectedId, search, focus, collapsedCommunities: projection.communities.filter(group => group.collapsed).map(group => group.id), annotations, sourceUpdatedAt: run.updatedAt, ...snapshot };
+  };
+  const loadGraphView = (view: SavedGraphView) => {
+    if (view.runId !== activeRunId.current) return;
+    analysisGeneration.current++;
+    const state = view.state;
+    setLayout(state.layout); setDisplayDepth(state.displayDepth); setDisplayLimit(state.displayLimit);
+    setSelectedId(state.selectedId); setAnalysis(null); setSearch(state.search ?? "");
+    updateExploration({ focus: state.focus, collapsed: state.collapsedCommunities, annotations: state.annotations, restore: { key: `${view.id}:${crypto.randomUUID()}`, snapshot: { positions: state.positions, viewport: state.viewport } } });
+  };
   const demo = (run?.mode ?? config.data?.mode) === "demo";
   const busy = activeRun(run?.status);
   const selectRun = (next: CrawlRun) => {
@@ -358,16 +407,17 @@ export function App() {
   const analyze = useMutation({
     mutationFn: async (kind: "mutual" | "path") => {
       const selection = { runId, from, to };
+      const generation = analysisGeneration.current;
       const result = await api.analysis(
         selection.runId!,
         kind,
         selection.from,
         selection.to,
       );
-      return { result, selection };
+      return { result, selection, generation };
     },
-    onSuccess: ({ result, selection }) => {
-      if (!matchesAnalysisSelection(selection, latestAnalysisSelection.current))
+    onSuccess: ({ result, selection, generation }) => {
+      if (generation !== analysisGeneration.current || !matchesAnalysisSelection(selection, latestAnalysisSelection.current))
         return;
       setAnalysis(result);
       setSearch("");
@@ -779,6 +829,7 @@ export function App() {
                       }}
                       placeholder="搜索玩家名称或 ID"
                       aria-label="搜索图中玩家"
+                      maxLength={200}
                     />
                     {search && (
                       <button
@@ -816,10 +867,13 @@ export function App() {
                       <Layers3 size={13} />
                       <select
                         value={displayDepth}
-                        onChange={(event) =>
-                          setDisplayDepth(Number(event.target.value))
-                        }
+                        onChange={(event) => {
+                          setDisplayDepth(Number(event.target.value));
+                          updateExploration({ restore: undefined });
+                        }}
                         aria-label="显示层级"
+                        disabled={!!focus}
+                        title={focus ? "聚焦模式按所选玩家的一跳或两跳关系显示" : undefined}
                       >
                         {[1, 2, 3]
                           .filter((value) => value <= run.depth)
@@ -833,9 +887,10 @@ export function App() {
                     <label>
                       <select
                         value={displayLimit}
-                        onChange={(event) =>
-                          setDisplayLimit(Number(event.target.value))
-                        }
+                        onChange={(event) => {
+                          setDisplayLimit(Number(event.target.value));
+                          updateExploration({ restore: undefined });
+                        }}
                         aria-label="图谱显示节点上限"
                       >
                         {[100, 250, 500, 1000].map((value) => (
@@ -848,7 +903,7 @@ export function App() {
                     <label>
                       <select
                         value={layout}
-                        onChange={(event) => setLayout(event.target.value)}
+                        onChange={(event) => { setLayout(event.target.value); updateExploration({ restore: undefined }); }}
                         aria-label="图谱布局"
                       >
                         <option value="radial">径向布局</option>
@@ -859,6 +914,7 @@ export function App() {
                   </div>
                 </div>
               )}
+              {run && <GraphExplorationTools key={run.id} run={run} selected={selected} focus={focus} communities={projection.communities} protectedIds={protectedIds} disabled={!graphReady} onFocus={focusGraph} onCollapse={ids => updateExploration({ collapsed: ids, restore: undefined })} onCapture={captureGraphView} onLoad={loadGraphView} />}
               <div className={cn("graph-canvas", !run && "empty-canvas")}>
                 {!run ? (
                   current.isLoading ? (
@@ -889,14 +945,19 @@ export function App() {
                     }
                   >
                     <NetworkGraph
+                      ref={graphHandle}
                       runId={run!.id}
-                      nodes={merged.nodes}
-                      edges={merged.edges}
-                      rootId={run.rootId}
+                      nodes={projection.nodes}
+                      edges={projection.edges}
+                      rootId={graph?.focus?.playerId ?? run.rootId}
                       selectedId={selectedId}
                       highlightIds={highlights}
                       layout={layout}
                       onSelect={setSelectedId}
+                      onExpandCommunity={id => updateExploration({ collapsed: collapsed.filter(group => group !== id), restore: undefined })}
+                      viewRevision={graphViewRevision}
+                      restoreView={graphReady ? explored.restore : undefined}
+                      onRestoreComplete={key => setExploration(previous => previous.runId === runId && previous.restore?.key === key ? { ...previous, restore: undefined } : previous)}
                     />
                   </Suspense>
                 ) : (
@@ -926,7 +987,7 @@ export function App() {
                   <div className="graph-legend">
                     <span>
                       <i className="legend-root" />
-                      查询起点
+                      {graph?.focus ? "聚焦中心" : "查询起点"}
                     </span>
                     <span>
                       <i className="legend-friend" />
@@ -949,11 +1010,15 @@ export function App() {
                 <span>
                   <Activity size={12} />
                   {run
-                    ? `画布显示 ${format(merged.nodes.length)} / ${format(graph?.totalNodes ?? run.nodeCount)} 个已采集节点`
+                    ? projection.communities.some(group => group.collapsed)
+                      ? `画布 ${format(projection.nodes.length)} 个节点，代表 ${format(projection.representedPlayers)} / ${format(graph?.totalNodes ?? run.nodeCount)} 位玩家`
+                      : `画布显示 ${format(merged.nodes.length)} / ${format(graph?.totalNodes ?? run.nodeCount)} 个已采集节点`
                     : "准备好发现新的连接了吗？"}
                 </span>
                 <span>
-                  {graph?.truncated
+                  {graph?.focus
+                    ? `聚焦 ${graph.focus.hops} 跳 · 范围内共 ${format(graph.focus.totalNodes)} 位 · 仅含已采集关系`
+                    : graph?.truncated
                     ? "已限制显示 · 分析仍使用全部已采集数据"
                     : "拖动平移 · 滚轮缩放 · 点击查看节点"}
                 </span>
@@ -1157,6 +1222,7 @@ export function App() {
                             不可访问、失败与边界节点不代表没有好友；已知关系仍会保留。
                           </p>
                         )}
+                        <GraphPlayerNotes key={`${run?.id}:${selected.id}`} player={selected} annotation={annotations[selected.id]} onChange={value => updateExploration({ annotations: { ...annotations, [selected.id]: value } })} />
                       </>
                     ) : (
                       <div className="detail-empty">

@@ -1,22 +1,30 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useImperativeHandle, useRef, useState, type Ref } from "react";
 import { Graph, type IElementEvent } from "@antv/g6";
 import { Expand, Minus, Plus, LocateFixed } from "lucide-react";
-import type {
-  GraphNode,
-  GraphEdge,
-} from "../../../../packages/shared/src/index";
+import type { GraphViewportSnapshot } from "../../../../packages/shared/src/index";
+import type { ExplorationEdge, ExplorationNode } from "../lib/graph-exploration";
 import {
   createGraphTaskQueue,
   planGraphUpdate,
   type GraphPosition,
   type GraphSnapshot,
 } from "../lib/graph-updates";
+import {
+  captureGraphViewport,
+  rememberGraphPositions,
+  restoreGraphViewport,
+} from "../lib/graph-viewport";
 import { Button } from "./ui";
 import { useProfileHover } from "./ProfileHoverCard";
 
 type GraphCommand = "in" | "out" | "fit" | "focus";
 
+export interface NetworkGraphHandle {
+  capture(): Promise<GraphViewportSnapshot | null>;
+}
+
 export default function NetworkGraph({
+  ref,
   runId,
   nodes,
   edges,
@@ -25,30 +33,48 @@ export default function NetworkGraph({
   highlightIds,
   layout,
   onSelect,
+  onExpandCommunity,
+  onRestoreComplete,
+  viewRevision,
+  restoreView,
 }: {
+  ref?: Ref<NetworkGraphHandle>;
   runId: string;
-  nodes: GraphNode[];
-  edges: GraphEdge[];
+  nodes: ExplorationNode[];
+  edges: ExplorationEdge[];
   rootId: string;
   selectedId: string | null;
   highlightIds: string[];
   layout: string;
   onSelect: (id: string) => void;
+  onExpandCommunity?: (id: number) => void;
+  onRestoreComplete?: (key: string) => void;
+  viewRevision?: string;
+  restoreView?: { key: string; snapshot: GraphViewportSnapshot };
 }) {
   const container = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<{
     sync: () => void;
     states: () => void;
     command: (kind: GraphCommand) => void;
+    capture: () => Promise<GraphViewportSnapshot | null>;
   } | null>(null);
-  const latest = useRef({ nodes, edges, selectedId, highlightIds });
-  latest.current = { nodes, edges, selectedId, highlightIds };
+  const latest = useRef({ nodes, edges, selectedId, highlightIds, viewRevision, restoreView });
+  latest.current = { nodes, edges, selectedId, highlightIds, viewRevision, restoreView };
+  const restoredKeys = useRef(new Set<string>());
   const selectRef = useRef(onSelect);
   selectRef.current = onSelect;
+  const expandRef = useRef(onExpandCommunity);
+  expandRef.current = onExpandCommunity;
+  const restoredRef = useRef(onRestoreComplete);
+  restoredRef.current = onRestoreComplete;
   const hover = useProfileHover();
   const hoverRef = useRef(hover);
   hoverRef.current = hover;
   const [error, setError] = useState<string | null>(null);
+  useImperativeHandle(ref, () => ({
+    capture: () => sessionRef.current?.capture() ?? Promise.resolve(null),
+  }), []);
 
   useEffect(() => {
     const host = container.current;
@@ -59,6 +85,7 @@ export default function NetworkGraph({
     let dragging = false;
     let hoveredId: string | null = null;
     let commandId = 0;
+    let appliedRevision = latest.current.viewRevision;
     let applied: GraphSnapshot = { nodes: [], edges: [] };
     const positions = new Map<string, GraphPosition>();
     setError(null);
@@ -183,13 +210,7 @@ export default function NetworkGraph({
         if (dragging) return;
         const next = latest.current;
         if (!rendered && !next.nodes.length) return;
-        if (rendered) {
-          for (const node of graph.getNodeData()) {
-            const [x, y] = graph.getElementPosition(node.id);
-            if (Number.isFinite(x) && Number.isFinite(y))
-              positions.set(node.id, { x, y });
-          }
-        }
+        if (rendered) rememberGraphPositions(graph, positions);
         const patch = planGraphUpdate(applied, next, rootId, layout, positions);
         if (patch.changed) {
           graph.removeData(patch.remove);
@@ -198,18 +219,36 @@ export default function NetworkGraph({
           applied = next;
           dirty = true;
         }
+        const firstRender = !rendered;
         if (!rendered) {
           await graph.render();
           if (disposed) return;
           rendered = true;
           dirty = false;
-          await graph.fitView(undefined, false);
         } else if (dirty) {
           // draw updates elements without rerunning layout or fitting the camera.
           await graph.draw();
           dirty = false;
         }
         if (disposed) return;
+        const restore = next.restoreView;
+        const restoreKey = restore && `${runId}:${restore.key}`;
+        if (restore && restoreKey && !restoredKeys.current.has(restoreKey)) {
+          const restoredCamera = await restoreGraphViewport(graph, restore.snapshot, positions, () => disposed);
+          if (disposed) return;
+          if (!restoredCamera) await graph.fitView(undefined, false);
+          if (disposed) return;
+          restoredKeys.current.add(restoreKey);
+          restoredRef.current?.(restore.key);
+        } else if (firstRender || next.viewRevision !== appliedRevision) {
+          await graph.fitView(undefined, false);
+        }
+        appliedRevision = next.viewRevision;
+        if (disposed) return;
+        if (hoveredId && !next.nodes.some((node) => node.id === hoveredId)) {
+          hoveredId = null;
+          hoverRef.current.close();
+        }
         await applyStates();
         if (!disposed) setError(null);
       });
@@ -217,7 +256,8 @@ export default function NetworkGraph({
     const showProfile = (id: string, immediate = false) => {
       if (!rendered || disposed) return;
       const node = latest.current.nodes.find((item) => item.id === id);
-      if (!node) return;
+      // Community IDs are local graph projections, never Steam profiles.
+      if (!node || node.kind === "community") return;
       const [x, y] = graph.getClientByCanvas(graph.getElementPosition(id));
       const radius =
         (node.id === rootId ? 31 : (36 + Math.min(node.degree, 15)) / 2) *
@@ -237,9 +277,17 @@ export default function NetworkGraph({
       if (disposed) return;
       const target = (event as IElementEvent).target;
       if (target?.id) {
-        selectRef.current(String(target.id));
+        const id = String(target.id);
+        const node = applied.nodes.find((item) => item.id === id);
+        if (!node) return;
+        if (node.kind === "community") {
+          hoverRef.current.close();
+          expandRef.current?.(node.community);
+          return;
+        }
+        selectRef.current(id);
         if ((event as IElementEvent).pointerType === "touch")
-          showProfile(String(target.id), true);
+          showProfile(id, true);
       }
     });
     graph.on("node:pointerenter", (event) => {
@@ -278,6 +326,14 @@ export default function NetworkGraph({
     sessionRef.current = {
       sync,
       states: scheduleStates,
+      capture() {
+        // Flush pending data first; requests have their own keys and are never
+        // coalesced away. Disposal settles all captures with null immediately.
+        sync();
+        return queue.request(() => rendered && !disposed
+          ? captureGraphViewport(graph, positions)
+          : null);
+      },
       command(kind) {
         void queue.enqueue(`command-${commandId++}`, async () => {
           if (!rendered) return;
@@ -313,7 +369,7 @@ export default function NetworkGraph({
 
   useEffect(() => {
     sessionRef.current?.sync();
-  }, [nodes, edges]);
+  }, [nodes, edges, viewRevision, restoreView]);
   useEffect(() => {
     sessionRef.current?.states();
   }, [selectedId, highlightIds]);

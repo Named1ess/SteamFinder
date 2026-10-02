@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { GraphNode } from "../../../../packages/shared/src/index";
+import type { ExplorationNode } from "./graph-exploration";
 import { planGraphUpdate, createGraphTaskQueue } from "./graph-updates";
 
-const node = (id: string, overrides: Partial<GraphNode> = {}): GraphNode => ({
+const node = (id: string, overrides: Partial<ExplorationNode> = {}): ExplorationNode => ({
   id,
   name: id,
   avatar: null,
@@ -25,6 +25,56 @@ const positions = new Map([
 ]);
 
 describe("incremental graph updates", () => {
+  it("distinguishes community nodes without displaying a Steam avatar", () => {
+    const community = node("community:2", {
+      kind: "community", community: 2, memberIds: ["a", "b", "c"],
+      memberCount: 3, internalEdges: 2, avatar: "https://example.test/wrong.jpg",
+    });
+    const patch = planGraphUpdate(
+      { nodes: [], edges: [] }, { nodes: [community], edges: [] },
+      "root", "radial", new Map(),
+    );
+    const style = patch.add.nodes[0].style!;
+    expect(style.iconSrc).toBe("");
+    expect(style.iconText).toBe("3");
+    expect(style.labelText).toContain("3 人");
+    expect(style.labelText).toContain("2 条内部关系");
+    expect(Number(style.size)).toBeGreaterThan(62);
+    expect(style.lineDash).toEqual(expect.arrayContaining([expect.any(Number)]));
+  });
+
+  it("does not redraw equivalent community membership arrays", () => {
+    const community = node("community:2", {
+      kind: "community", community: 2, memberIds: ["a", "b"], memberCount: 2,
+    });
+    const patch = planGraphUpdate(
+      { nodes: [community], edges: [] },
+      { nodes: [{ ...community, memberIds: ["a", "b"] }], edges: [] },
+      "root", "radial", positions,
+    );
+    expect(patch.changed).toBe(false);
+  });
+
+  it("updates aggregate edge counts without replacing their endpoints", () => {
+    const previous = { ...base, edges: [{ ...base.edges[0], count: 2 }] };
+    const next = { ...base, edges: [{ ...base.edges[0], count: 7 }] };
+    const patch = planGraphUpdate(previous, next, "root", "radial", positions);
+    expect(patch.changed).toBe(true);
+    expect(patch.add.edges).toEqual([]);
+    expect(patch.remove.edges).toEqual([]);
+    expect(patch.update.edges).toHaveLength(1);
+    expect(patch.update.edges[0].style).toMatchObject({ labelText: "7", pointerEvents: "none" });
+    expect(Number(patch.update.edges[0].style?.lineWidth)).toBeGreaterThan(1);
+  });
+
+  it("clears aggregate edge labels when an edge becomes an individual friendship", () => {
+    const patch = planGraphUpdate(
+      { ...base, edges: [{ ...base.edges[0], count: 3 }] }, base,
+      "root", "radial", positions,
+    );
+    expect(patch.update.edges[0].style).toMatchObject({ labelText: "", lineWidth: 1 });
+  });
+
   it("updates changed metadata without overwriting dragged coordinates", () => {
     const next = {
       ...base,
@@ -153,6 +203,55 @@ describe("incremental graph updates", () => {
 });
 
 describe("graph operation lifecycle", () => {
+  it("captures after all earlier graph updates complete", async () => {
+    let release!: () => void;
+    let position = 1;
+    const queue = createGraphTaskQueue(() => undefined);
+    void queue.enqueue("data", async () => {
+      await new Promise<void>((resolve) => { release = resolve; });
+      position = 2;
+    });
+    const captured = queue.request(() => position);
+    await Promise.resolve();
+    release();
+    await expect(captured).resolves.toBe(2);
+  });
+
+  it("settles queued capture requests immediately when disposed during rendering", async () => {
+    let release!: () => void;
+    const queue = createGraphTaskQueue(() => undefined);
+    void queue.enqueue("render", () => new Promise<void>((resolve) => { release = resolve; }));
+    await Promise.resolve();
+    const capture = queue.request(() => "should not capture");
+    const disposed = queue.dispose(() => undefined);
+    await expect(capture).resolves.toBeNull();
+    await expect(queue.request(() => "too late")).resolves.toBeNull();
+    release();
+    await disposed;
+  });
+
+  it("settles failed capture requests and permits later captures", async () => {
+    const errors: unknown[] = [];
+    const queue = createGraphTaskQueue((error) => errors.push(error));
+    await expect(queue.request(() => { throw new Error("capture failed"); })).resolves.toBeNull();
+    expect(errors).toHaveLength(1);
+    await expect(queue.request(() => 42)).resolves.toBe(42);
+  });
+
+  it("cancels an active asynchronous capture before waiting for graph destruction", async () => {
+    let release!: (value: string) => void;
+    let destroyed = false;
+    const queue = createGraphTaskQueue(() => undefined);
+    const capture = queue.request(() => new Promise<string>((resolve) => { release = resolve; }));
+    await Promise.resolve();
+    const disposal = queue.dispose(() => { destroyed = true; });
+    await expect(capture).resolves.toBeNull();
+    expect(destroyed).toBe(false);
+    release("stale snapshot");
+    await disposal;
+    expect(destroyed).toBe(true);
+  });
+
   it("waits for an in-flight render and coalesces pending data updates", async () => {
     const events: string[] = [];
     let release!: () => void;

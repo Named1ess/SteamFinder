@@ -69,6 +69,14 @@ export const runs = pgTable("crawl_runs", {
   updatedAt: time("updated_at").notNull().defaultNow(),
   completedAt: time("completed_at"),
 });
+export const savedGraphViews = pgTable("saved_graph_views", {
+  id: uuid("id").primaryKey(),
+  runId: uuid("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  name: text("name").notNull(),
+  state: jsonb("state").notNull(),
+  createdAt: time("created_at").notNull().defaultNow(),
+  updatedAt: time("updated_at").notNull().defaultNow(),
+}, (table) => [index("saved_graph_views_run").on(table.runId, table.updatedAt)]);
 export const runNodes = pgTable(
   "run_nodes",
   {

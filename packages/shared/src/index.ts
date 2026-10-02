@@ -53,6 +53,40 @@ export interface GraphEdge {
   source: string;
   target: string;
 }
+export interface GraphViewportSnapshot {
+  positions: Record<string, { x: number; y: number }>;
+  viewport: { zoom: number; center: { x: number; y: number } } | null;
+}
+export interface GraphFocus {
+  playerId: string;
+  hops: 1 | 2;
+}
+export interface PlayerAnnotation {
+  note: string;
+  tags: string[];
+}
+export interface GraphViewState extends GraphViewportSnapshot {
+  version: 1;
+  layout: "radial" | "circular" | "grid";
+  displayDepth: number;
+  displayLimit: number;
+  selectedId: string | null;
+  search?: string;
+  focus: GraphFocus | null;
+  collapsedCommunities: number[];
+  annotations: Record<string, PlayerAnnotation>;
+  sourceUpdatedAt: string;
+}
+export interface SavedGraphViewSummary {
+  id: string;
+  runId: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface SavedGraphView extends SavedGraphViewSummary {
+  state: GraphViewState;
+}
 export type PlayerSearchOption = Pick<
   GraphNode,
   "id" | "name" | "avatar" | "profileUrl" | "depth"
@@ -141,6 +175,7 @@ export interface GraphStats {
   frontierNodes: number;
 }
 export interface GraphResponse {
+  focus?: GraphFocus & { totalNodes: number };
   run: CrawlRun;
   nodes: GraphNode[];
   edges: GraphEdge[];

@@ -5,6 +5,10 @@ import type {
   CreateRunInput,
   CreateRunResult,
   GraphResponse,
+  GraphFocus,
+  GraphViewState,
+  SavedGraphView,
+  SavedGraphViewSummary,
   GameScoresResponse,
   PlayerDetailsSnapshot,
   PlayerSearchResponse,
@@ -19,7 +23,7 @@ import type {
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`/api${path}`, {
     ...init,
-    headers: { "Content-Type": "application/json", ...init?.headers },
+    headers: { ...(init?.body != null ? { "Content-Type": "application/json" } : {}), ...init?.headers },
   });
   const body = await response.json().catch(() => null);
   if (!response.ok)
@@ -42,11 +46,18 @@ export const api = {
     ),
   runs: () => request<{ runs: CrawlRun[] }>("/runs"),
   run: (id: string) => request<CrawlRun>(`/runs/${encodeURIComponent(id)}`),
-  graph: (id: string, limit: number, depth: number, signal?: AbortSignal) =>
+  graph: (id: string, limit: number, depth: number, signal?: AbortSignal, focus?: GraphFocus | null) =>
     request<GraphResponse>(
-      `/runs/${encodeURIComponent(id)}/graph?limit=${limit}&depth=${depth}`,
+      `/runs/${encodeURIComponent(id)}/graph?${new URLSearchParams({ limit: String(limit), depth: String(depth), ...(focus ? { focusCenter: focus.playerId, focusHops: String(focus.hops) } : {}) })}`,
       { signal },
     ),
+  views: (id: string, signal?: AbortSignal) => request<{ views: SavedGraphViewSummary[] }>(`/runs/${encodeURIComponent(id)}/views`, { signal }),
+  view: (id: string, viewId: string) => request<SavedGraphView>(`/runs/${encodeURIComponent(id)}/views/${encodeURIComponent(viewId)}`),
+  saveView: (id: string, name: string, state: GraphViewState, viewId?: string) => request<SavedGraphView>(
+    `/runs/${encodeURIComponent(id)}/views${viewId ? `/${encodeURIComponent(viewId)}` : ""}`,
+    { method: viewId ? "PUT" : "POST", body: JSON.stringify({ name, state }) },
+  ),
+  deleteView: (id: string, viewId: string) => request<{ ok: boolean }>(`/runs/${encodeURIComponent(id)}/views/${encodeURIComponent(viewId)}`, { method: "DELETE" }),
   create: (input: CreateRunInput) =>
     request<CreateRunResult>("/runs", {
       method: "POST",

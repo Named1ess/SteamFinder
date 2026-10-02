@@ -1,8 +1,5 @@
 import type { EdgeData, NodeData } from "@antv/g6";
-import type {
-  GraphEdge,
-  GraphNode,
-} from "../../../../packages/shared/src/index";
+import type { ExplorationEdge, ExplorationNode } from "./graph-exploration";
 import { depthRingPositions, graphInitials } from "./graph";
 
 const colors = [
@@ -15,44 +12,66 @@ const colors = [
 ];
 
 export interface GraphSnapshot {
-  nodes: GraphNode[];
-  edges: GraphEdge[];
+  nodes: ExplorationNode[];
+  edges: ExplorationEdge[];
 }
 export interface GraphPosition {
   x: number;
   y: number;
 }
 
-function nodeData(node: GraphNode, rootId: string, crowded: boolean): NodeData {
+function nodeData(node: ExplorationNode, rootId: string, crowded: boolean): NodeData {
   const root = node.id === rootId;
+  const community = node.kind === "community";
+  const members = node.memberCount ?? node.memberIds?.length ?? 0;
   return {
     id: node.id,
     data: { ...node },
     // Existing nodes deliberately receive no coordinates: G6 owns their layout
     // and drag positions. Empty strings also clear a previously rendered icon.
     style: {
-      size: root ? 62 : 36 + Math.min(node.degree, 15),
-      fill: "#17283a",
+      size: community ? 70 + Math.min(members, 20) : root ? 62 : 36 + Math.min(node.degree, 15),
+      fill: community ? "#27364a" : "#17283a",
       stroke:
         node.fetchStatus === "private"
           ? "#a78c68"
           : colors[node.community % colors.length],
-      lineWidth: root ? 3 : 1.7,
-      labelText: node.name,
+      lineWidth: community ? 2.5 : root ? 3 : 1.7,
+      lineDash: community ? [6, 4] : [],
+      labelText: community
+        ? `社群 ${node.community + 1} · ${members} 人\n${node.internalEdges ?? 0} 条内部关系 · 点击展开`
+        : node.name,
       labelFill: "#b6c5d8",
       labelFontSize: 11,
       labelPlacement: "bottom",
-      labelMaxWidth: 150,
-      labelOpacity: crowded && !root ? 0 : 1,
-      iconText: node.avatar ? "" : graphInitials(node.name),
-      iconSrc: node.avatar || "",
+      labelMaxWidth: community ? 230 : 150,
+      labelOpacity: crowded && !root && !community ? 0 : 1,
+      iconText: community ? String(members) : node.avatar ? "" : graphInitials(node.name),
+      iconSrc: community ? "" : node.avatar || "",
       iconWidth: root ? 48 : 28,
       iconHeight: root ? 48 : 28,
-      iconFontSize: root || node.name.includes("演示玩家") ? 16 : 11,
+      iconFontSize: community ? 22 : root || node.name.includes("演示玩家") ? 16 : 11,
       iconFill: "#edf7ff",
       halo: root,
       haloFill: "#61d7c0",
       haloFillOpacity: 0.09,
+    },
+  };
+}
+
+function edgeData(edge: ExplorationEdge, resetStyle = false): EdgeData {
+  if (edge.count === undefined && !resetStyle) return { ...edge };
+  return {
+    ...edge,
+    style: {
+      lineWidth: edge.count === undefined ? 1 : Math.min(6, 1 + Math.log2(Math.max(1, edge.count) + 1)),
+      labelText: edge.count === undefined ? "" : String(edge.count),
+      labelFill: "#b6c5d8",
+      labelFontSize: 10,
+      labelBackground: true,
+      labelBackgroundFill: "#142234",
+      labelPadding: [2, 4],
+      pointerEvents: "none",
     },
   };
 }
@@ -68,7 +87,7 @@ export function planGraphUpdate(
   const patch = {
     changed: false,
     add: { nodes: [] as NodeData[], edges: [] as EdgeData[] },
-    update: { nodes: [] as NodeData[] },
+    update: { nodes: [] as NodeData[], edges: [] as EdgeData[] },
     remove: { nodes: [] as string[], edges: [] as string[] },
   };
   const oldNodes = new Map(previous.nodes.map((node) => [node.id, node]));
@@ -83,8 +102,11 @@ export function planGraphUpdate(
     if (!old) patch.add.nodes.push(nodeData(node, rootId, crowded));
     else if (
       (crowdingChanged && node.id !== rootId) ||
-      (Object.keys(node) as (keyof GraphNode)[]).some(
-        (key) => node[key] !== old[key],
+      ([...new Set([...Object.keys(node), ...Object.keys(old)])] as (keyof ExplorationNode)[]).some(
+        (key) => key === "memberIds"
+          ? node.memberIds?.length !== old.memberIds?.length ||
+            node.memberIds?.some((id, index) => id !== old.memberIds?.[index])
+          : node[key] !== old[key],
       )
     )
       patch.update.nodes.push(nodeData(node, rootId, crowded));
@@ -105,8 +127,9 @@ export function planGraphUpdate(
   for (const edge of next.edges) {
     const old = oldEdges.get(edge.id);
     if (!old || old.source !== edge.source || old.target !== edge.target) {
-      patch.add.edges.push({ ...edge });
-    }
+      patch.add.edges.push(edgeData(edge));
+    } else if (old.count !== edge.count)
+      patch.update.edges.push(edgeData(edge, true));
   }
 
   if (patch.add.nodes.length) {
@@ -191,6 +214,7 @@ export function planGraphUpdate(
     patch.add.nodes.length ||
       patch.add.edges.length ||
       patch.update.nodes.length ||
+      patch.update.edges.length ||
       patch.remove.nodes.length ||
       patch.remove.edges.length,
   );
@@ -203,7 +227,9 @@ export function createGraphTaskQueue(onError: (error: unknown) => void) {
   let closed = false;
   let running: Promise<void> | null = null;
   let disposing: Promise<void> | undefined;
-  return {
+  let requestId = 0;
+  const requests = new Set<() => void>();
+  const queue = {
     enqueue(key: string, action: () => void | Promise<void>): Promise<void> {
       if (closed) return Promise.resolve();
       pending.set(key, action);
@@ -224,11 +250,32 @@ export function createGraphTaskQueue(onError: (error: unknown) => void) {
       });
       return running;
     },
+    request<T>(action: () => T | Promise<T>): Promise<T | null> {
+      if (closed) return Promise.resolve(null);
+      return new Promise<T | null>((resolve) => {
+        const cancel = () => resolve(null);
+        requests.add(cancel);
+        void queue.enqueue(`request-${requestId++}`, async () => {
+          try {
+            const result = await action();
+            resolve(closed ? null : result);
+          } catch (error) {
+            resolve(null);
+            throw error;
+          } finally {
+            requests.delete(cancel);
+          }
+        });
+      });
+    },
     dispose(cleanup: () => void): Promise<void> {
       closed = true;
       pending.clear();
+      for (const cancel of requests) cancel();
+      requests.clear();
       disposing ??= (running ?? Promise.resolve()).then(cleanup);
       return disposing;
     },
   };
+  return queue;
 }

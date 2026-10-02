@@ -10,13 +10,14 @@ import {
   getGraphData,
   HttpError,
 } from "./repository.js";
-import { graphResponse, analyze } from "./graph.js";
+import { graphResponse, analyze, graphQuerySchema } from "./graph.js";
 import { boss, startQueue, enqueue, enqueueGameScores, enqueueGroups } from "./queue.js";
 import { createSearch } from "./search.js";
 import { getGameScores, startGameScoreJob } from "./game-scores.js";
 import { getRunGroups, startGroupCollectionJob, recoverGroupCollectionJobs } from "./group-scores.js";
 import { collectPlayerDetails, getPlayerDetails } from "./player-details.js";
 import { playerSearchQuerySchema, searchRunPlayers } from "./player-search.js";
+import { registerSavedViewRoutes } from "./saved-views.js";
 import { getRelationshipScores, relationshipScoresQuerySchema, relationshipPageQuerySchema, getRelationshipScorePage, getRelationshipOverview, getRelationshipScoreDetail } from "./relationship-scores.js";
 const app = Fastify({ logger: false, bodyLimit: 8192 });
 const provider =
@@ -56,9 +57,10 @@ app.setErrorHandler((error, _request, reply) => {
     return reply
       .code(error.kind === "invalid" ? 400 : 502)
       .send({ message: error.message });
+  const status = (error as { statusCode?: number }).statusCode;
   return reply
-    .code((error as { statusCode?: number }).statusCode === 400 ? 400 : 500)
-    .send({ message: "服务暂时无法完成请求" });
+    .code(status === 400 || status === 413 ? status : 500)
+    .send({ message: status === 413 ? "请求内容过大" : "服务暂时无法完成请求" });
 });
 app.get("/api/health", async () => {
   await pool.query("SELECT 1");
@@ -72,6 +74,7 @@ app.get("/api/config", async () => ({
   requestDelayMs: config.delay,
 }));
 app.get("/api/runs", async () => ({ runs: await listRuns() }));
+registerSavedViewRoutes(app);
 app.get("/api/players/:id/details", async (request) => getPlayerDetails((request.params as { id: string }).id));
 app.post("/api/players/:id/details", async (request) => {
   const options = parse(z.object({ refresh: z.boolean().optional() }).strict(), request.body ?? {});
@@ -127,15 +130,14 @@ app.post("/api/runs/:id/game-scores", async (request) => {
 app.get("/api/runs/:id/graph", async (request) => {
   const id = idFrom(request);
   const query = parse(
-    z.object({
-      limit: z.coerce.number().int().min(1).max(1000).default(500),
-      depth: z.coerce.number().int().min(0).max(3).default(3),
-    }),
+    graphQuerySchema,
     request.query,
   );
   const run = await getRun(id),
     data = await getGraphData(id, run);
-  return graphResponse(run, data.nodes, data.edges, query.limit, query.depth);
+  return graphResponse(run, data.nodes, data.edges, query.limit, query.depth,
+    query.focusCenter && query.focusHops ? { playerId: query.focusCenter, hops: query.focusHops } : undefined,
+  );
 });
 app.get("/api/runs/:id/analysis", async (request) => {
   const id = idFrom(request);
