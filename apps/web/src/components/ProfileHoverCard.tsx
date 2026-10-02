@@ -18,6 +18,7 @@ import {
 } from "@tanstack/react-query";
 import {
   Clock3,
+  ExternalLink,
   LoaderCircle,
   MapPin,
   RefreshCw,
@@ -363,7 +364,19 @@ function ProfileCard({
       <div className="profile-card-heading">
         <div>
           <span>STEAM 公开资料</span>
-          <strong>{target.player.name}</strong>
+          <strong>
+            <a
+              className="profile-name-link"
+              href={`https://steamcommunity.com/profiles/${encodeURIComponent(target.player.id)}/`}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={`${target.player.name} 的 Steam 主页（新标签页打开）`}
+              title="在新标签页打开 Steam 主页"
+            >
+              {target.player.name}
+              <ExternalLink size={13} aria-hidden="true" />
+            </a>
+          </strong>
           <small>{target.player.id}</small>
         </div>
         <Button

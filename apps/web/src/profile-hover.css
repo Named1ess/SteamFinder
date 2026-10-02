@@ -48,6 +48,28 @@
   font-size: 10px;
   color: #778e9e;
 }
+.profile-name-link {
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: #496773;
+  text-underline-offset: 4px;
+  border-radius: 2px;
+}
+.profile-name-link svg {
+  display: inline-block;
+  margin-left: 6px;
+  vertical-align: middle;
+  color: #8ce6d2;
+}
+.profile-name-link:hover,
+.profile-name-link:focus-visible {
+  color: #8ce6d2;
+  text-decoration-color: currentColor;
+}
+.profile-name-link:focus-visible {
+  outline: 2px solid #8ce6d2;
+  outline-offset: 3px;
+}
 .profile-close {
   flex-shrink: 0;
 }
