@@ -42,6 +42,9 @@ import type {
   GraphViewportSnapshot,
   PlayerAnnotation,
   SavedGraphView,
+  GraphFilters,
+  GraphFilterResponse,
+  MultiFriendResponse,
 } from "../../../packages/shared/src/index";
 import { DEFAULT_ROOT } from "../../../packages/shared/src/index";
 import { api } from "./lib/api";
@@ -54,10 +57,14 @@ import {
   mergeGraph,
   relativeTime,
   statusText,
+  type AnalysisSelection,
 } from "./lib/graph";
 import { Badge, Button, Input, cn } from "./components/ui";
 import { DeferredPanel } from "./components/DeferredPanel";
 import { GraphExplorationTools, GraphPlayerNotes } from "./components/GraphExplorationTools";
+import { GraphFilterPanel } from "./components/GraphFilterPanel";
+import { MultiFriendPanel } from "./components/MultiFriendPanel";
+import { annotationTags, emptyGraphFilters, hasGraphFilters, taggedPlayerIds } from "./lib/graph-discovery";
 import type { NetworkGraphHandle } from "./components/NetworkGraph";
 import { projectCommunities } from "./lib/graph-exploration";
 import { PlayerCombobox } from "./components/PlayerCombobox";
@@ -184,12 +191,15 @@ export function App() {
   const graphHandle = useRef<NetworkGraphHandle>(null);
   const activeRunId = useRef(runId);
   activeRunId.current = runId;
-  type ExplorationState = { runId: string | null; focus: GraphFocus | null; collapsed: number[]; annotations: Record<string, PlayerAnnotation>; restore?: { key: string; snapshot: GraphViewportSnapshot } };
-  const emptyExploration = (): ExplorationState => ({ runId, focus: null, collapsed: [], annotations: {} });
+  type ExplorationState = { runId: string | null; focus: GraphFocus | null; collapsed: number[]; annotations: Record<string, PlayerAnnotation>; filters: GraphFilters; filterPage: number; restore?: { key: string; snapshot: GraphViewportSnapshot } };
+  const emptyExploration = (): ExplorationState => ({ runId, focus: null, collapsed: [], annotations: {}, filters: emptyGraphFilters(), filterPage: 0 });
   const [exploration, setExploration] = useState<ExplorationState>(emptyExploration);
   useEffect(() => setExploration(previous => previous.runId === runId ? previous : emptyExploration()), [runId]);
   const explored = exploration.runId === runId ? exploration : emptyExploration();
-  const { focus, collapsed, annotations } = explored;
+  const { focus, collapsed, annotations, filters, filterPage } = explored;
+  const filtersActive = hasGraphFilters(filters);
+  const tagPlayerIds = useMemo(() => taggedPlayerIds(annotations, filters.tag), [annotations, filters.tag]);
+  const personalTags = useMemo(() => annotationTags(annotations), [annotations]);
   const updateExploration = (change: Partial<ExplorationState>) => setExploration(previous => ({ ...(previous.runId === runId ? previous : emptyExploration()), ...change, runId }));
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -197,13 +207,17 @@ export function App() {
   const analysisGeneration = useRef(0);
   latestAnalysisSelection.current = { runId, from, to };
   const [analysis, setAnalysis] = useState<AnalysisResult | null>(null);
+  const [multiResult, setMultiResult] = useState<MultiFriendResponse | null>(null);
+  const multi = multiResult?.runId === runId ? multiResult : null;
+  const [multiResetKey, setMultiResetKey] = useState(0);
+  const clearMulti = () => { setMultiResult(null); setMultiResetKey(value => value + 1); };
   const [resumeNodes, setResumeNodes] = useState(2000);
   const [resumeRequests, setResumeRequests] = useState(1000);
   const [notice, setNotice] = useState<string | null>(null);
   const [sseConnected, setSseConnected] = useState(false);
   const lastGraphSnapshot = useRef<{ id: string; version: string } | null>(null);
   const lastPlayerSnapshot = useRef<string | null>(null);
-  const [rightTab, setRightTab] = useState<"overview" | "analysis">("overview");
+  const [rightTab, setRightTab] = useState<"overview" | "analysis" | "multi">("overview");
   const analysisPanel = useRef<HTMLElement>(null);
   const config = useQuery({
     queryKey: ["config"],
@@ -242,9 +256,27 @@ export function App() {
     // A final snapshot must supersede even an initial read started before completion.
     const refresh = activeRun(run.status) ? scheduleQueryRefresh : refreshQuerySnapshot;
     void refresh(client, ["graph", run.id]);
+    void refresh(client, ["filter-graph", run.id]);
+    void refresh(client, ["filter-options", run.id]);
     void scheduleQueryRefresh(client, ["runs"]);
   }, [client, run?.id, run?.updatedAt, run?.status, run?.nodeCount, run?.edgeCount, run?.fetchedCount, run?.privateCount, run?.errorCount]);
-  const graphQuery = useQuery<GraphResponse>({
+  useEffect(() => {
+    if (!runId) return;
+    const versions = new Map<string, string>();
+    return client.getQueryCache().subscribe(event => {
+      if (event.type !== "updated" || event.action.type !== "success") return;
+      const [kind, id] = event.query.queryKey;
+      if (id !== runId || (kind !== "game-scores" && kind !== "run-groups")) return;
+      const data = event.query.state.data as { job?: { id: string; status: string; updatedAt: string; processedPlayers: number } | null } | undefined;
+      const version = JSON.stringify(data?.job ?? null);
+      if (versions.get(kind) === version) return;
+      versions.set(kind, version);
+      const refresh = activeRun(data?.job?.status) ? scheduleQueryRefresh : refreshQuerySnapshot;
+      void refresh(client, ["filter-graph", runId]);
+      void refresh(client, ["filter-options", runId]);
+    });
+  }, [client, runId]);
+  const baseGraphQuery = useQuery<GraphResponse>({
     queryKey: ["graph", runId, displayLimit, displayDepth, focus?.playerId, focus?.hops],
     // Keep the canvas mounted while changing filters, without showing another run.
     placeholderData: (previous, previousQuery) =>
@@ -257,12 +289,19 @@ export function App() {
         signal,
         focus,
       ),
-    enabled: !!run,
+    enabled: !!run && !filtersActive && !multi,
     // The run query and SSE share the version-driven refresh above.
     refetchInterval: false,
   });
-  const graph = graphQuery.data;
-  const merged = useMemo(() => mergeGraph(graph, analysis), [graph?.nodes, graph?.edges, analysis]);
+  const filterQuery = useQuery<GraphFilterResponse & { criteriaKey: string }>({
+    queryKey: ["filter-graph", runId, filters, tagPlayerIds, focus, displayLimit, filterPage, selectedId],
+    queryFn: async ({ signal }) => ({ ...await api.filterGraph(runId!, { filters, tagPlayerIds, focus, limit: displayLimit, page: filterPage, selectedId }, signal), criteriaKey: JSON.stringify([filters, tagPlayerIds, focus]) }),
+    enabled: !!run && filtersActive && !multi,
+    placeholderData: (previous, query) => query?.queryKey[1] === runId ? previous : undefined,
+  });
+  const graphQuery = filtersActive ? filterQuery : baseGraphQuery;
+  const graph = filtersActive ? filterQuery.data?.graph : baseGraphQuery.data;
+  const merged = useMemo(() => multi ? { nodes: multi.nodes, edges: multi.edges } : mergeGraph(graph, analysis), [graph?.nodes, graph?.edges, analysis, multi]);
   const selected = merged.nodes.find((node) => node.id === selectedId);
   const matches = useMemo(
     () =>
@@ -277,43 +316,60 @@ export function App() {
   );
   const highlights = useMemo(
     () =>
-      analysis
+      multi
+        ? multi.nodes.map(node => node.id)
+        : analysis
         ? [
             ...new Set(
               [...analysis.nodeIds, ...analysis.path, from, to].filter(Boolean),
             ),
           ]
         : matches.map((node) => node.id),
-    [analysis, matches, from, to],
+    [analysis, matches, from, to, multi],
   );
   const protectedIds = useMemo(() => [...new Set([run?.rootId, selectedId, focus?.playerId, ...highlights].filter((id): id is string => !!id))], [run?.rootId, selectedId, focus?.playerId, highlights]);
   const projection = useMemo(() => projectCommunities(merged.nodes, merged.edges, collapsed, protectedIds), [merged.nodes, merged.edges, collapsed, protectedIds]);
-  const graphReady = !!run && !!graph && !graphQuery.isFetching && !graphQuery.isPlaceholderData && !graphQuery.isError;
-  const graphViewRevision = JSON.stringify([graph?.focus?.playerId, graph?.focus?.hops, projection.communities.filter(group => group.collapsed).map(group => group.id)]);
-  const captureRevision = useMemo(() => ({}), [runId, layout, displayDepth, displayLimit, selectedId, focus, collapsed, annotations, search, analysis, projection.nodes, projection.edges]);
+  const graphReady = !!run && (!!multi || (!!graph && !graphQuery.isFetching && !graphQuery.isPlaceholderData && !graphQuery.isError));
+  const graphViewRevision = JSON.stringify([graph?.focus?.playerId, graph?.focus?.hops, filtersActive ? filterQuery.data?.criteriaKey : null, multi ? [multi.playerIds, multi.minConnections, multi.page] : null, projection.communities.filter(group => group.collapsed).map(group => group.id)]);
+  const captureRevision = useMemo(() => ({}), [runId, layout, displayDepth, displayLimit, selectedId, focus, collapsed, annotations, search, analysis, multi, filters, projection.nodes, projection.edges]);
   const latestCaptureRevision = useRef(captureRevision);
   latestCaptureRevision.current = captureRevision;
   const focusGraph = (next: GraphFocus | null) => {
     analysisGeneration.current++;
-    updateExploration({ focus: next, restore: undefined });
+    clearMulti();
+    updateExploration({ focus: next, filterPage: 0, restore: undefined });
     if (next) setSelectedId(next.playerId);
     setAnalysis(null); setSearch("");
   };
+  const applyFilters = (next: GraphFilters) => {
+    analysisGeneration.current++; clearMulti(); setAnalysis(null); setSearch("");
+    updateExploration({ filters: next, filterPage: 0, restore: undefined });
+    if (JSON.stringify(next) === JSON.stringify(filters) && filterPage === 0 && hasGraphFilters(next)) void filterQuery.refetch();
+  };
+  const selectMatchedPlayer = (node: GraphNode) => { setSelectedId(node.id); setRightTab("overview"); };
+  const selectFilterPlayer = (node: GraphNode) => { analysisGeneration.current++; setAnalysis(null); clearMulti(); selectMatchedPlayer(node); };
+  const showMulti = (result: MultiFriendResponse) => {
+    if (result.runId !== activeRunId.current) return;
+    analysisGeneration.current++; setAnalysis(null); setSearch("");
+    updateExploration({ restore: undefined });
+    setMultiResult(result);
+  };
   const captureGraphView = async (): Promise<GraphViewState> => {
     if (!graphReady || !run) throw new Error("图谱仍在读取，请稍后保存");
-    if (analysis) throw new Error("请先清除连接分析结果，再保存当前视图");
-    const snapshot = await graphHandle.current?.capture();
+    if (analysis || multi) throw new Error("请先清除连接分析结果，再保存当前视图");
+    const snapshot = merged.nodes.length ? await graphHandle.current?.capture() : { positions: {}, viewport: null };
     if (!snapshot || activeRunId.current !== run.id) throw new Error("图谱已切换或尚未准备好，请重新保存");
     if (latestCaptureRevision.current !== captureRevision) throw new Error("图谱设置或数据已变化，请重新保存当前视图");
-    return { version: 1, layout: layout as GraphViewState["layout"], displayDepth: Math.min(displayDepth, run.depth), displayLimit, selectedId, search, focus, collapsedCommunities: projection.communities.filter(group => group.collapsed).map(group => group.id), annotations, sourceUpdatedAt: run.updatedAt, ...snapshot };
+    return { version: 1, layout: layout as GraphViewState["layout"], displayDepth: Math.min(displayDepth, run.depth), displayLimit, selectedId, search, filters, focus, collapsedCommunities: projection.communities.filter(group => group.collapsed).map(group => group.id), annotations, sourceUpdatedAt: run.updatedAt, ...snapshot };
   };
   const loadGraphView = (view: SavedGraphView) => {
     if (view.runId !== activeRunId.current) return;
     analysisGeneration.current++;
+    clearMulti();
     const state = view.state;
     setLayout(state.layout); setDisplayDepth(state.displayDepth); setDisplayLimit(state.displayLimit);
     setSelectedId(state.selectedId); setAnalysis(null); setSearch(state.search ?? "");
-    updateExploration({ focus: state.focus, collapsed: state.collapsedCommunities, annotations: state.annotations, restore: { key: `${view.id}:${crypto.randomUUID()}`, snapshot: { positions: state.positions, viewport: state.viewport } } });
+    updateExploration({ filters: state.filters ?? emptyGraphFilters(), filterPage: 0, focus: state.focus, collapsed: state.collapsedCommunities, annotations: state.annotations, restore: { key: `${view.id}:${crypto.randomUUID()}`, snapshot: { positions: state.positions, viewport: state.viewport } } });
   };
   const demo = (run?.mode ?? config.data?.mode) === "demo";
   const busy = activeRun(run?.status);
@@ -326,6 +382,7 @@ export function App() {
     setDisplayDepth(next.depth);
     setSelectedId(next.rootId);
     setAnalysis(null);
+    clearMulti();
     setSearch("");
     setFrom(next.rootId);
     setTo("");
@@ -337,6 +394,7 @@ export function App() {
       if (nextRunId === runId) return;
       setRunId(nextRunId);
       setAnalysis(null);
+      clearMulti();
       setSelectedId(null);
       setSearch("");
       setFrom("");
@@ -394,6 +452,7 @@ export function App() {
   const updateRun = (next: CrawlRun) => {
     client.setQueryData(["run", next.id], next);
     void refreshQuerySnapshot(client, ["graph", next.id]);
+    void refreshQuerySnapshot(client, ["filter-graph", next.id]);
     void client.invalidateQueries({ queryKey: ["runs"] });
   };
   const cancel = useMutation({
@@ -405,9 +464,7 @@ export function App() {
     onSuccess: updateRun,
   });
   const analyze = useMutation({
-    mutationFn: async (kind: "mutual" | "path") => {
-      const selection = { runId, from, to };
-      const generation = analysisGeneration.current;
+    mutationFn: async ({ kind, selection, generation }: { kind: "mutual" | "path"; selection: AnalysisSelection; generation: number }) => {
       const result = await api.analysis(
         selection.runId!,
         kind,
@@ -423,6 +480,14 @@ export function App() {
       setSearch("");
     },
   });
+  const analyzePair = (kind: "mutual" | "path") => {
+    clearMulti();
+    analyze.mutate({ kind, selection: { runId, from, to }, generation: ++analysisGeneration.current });
+  };
+  // Pending and failed requests belong to the same context as successful results.
+  const analysisCurrent = !!analyze.variables && analyze.variables.generation === analysisGeneration.current
+    && matchesAnalysisSelection(analyze.variables.selection, latestAnalysisSelection.current);
+  const analysisPending = analysisCurrent && analyze.isPending;
   const submit = (event: FormEvent) => {
     event.preventDefault();
     setNotice(null);
@@ -443,9 +508,9 @@ export function App() {
     });
   };
   const mutationError =
-    create.error || cancel.error || resume.error || analyze.error;
+    create.error || cancel.error || resume.error || (analysisCurrent ? analyze.error : null);
   const error =
-    mutationError || current.error || graphQuery.error || config.error;
+    mutationError || current.error || (multi ? null : graphQuery.error) || config.error;
   const changeFrom = (id: string) => {
     setFrom(id);
     setTo((currentTo) => (currentTo === id ? "" : currentTo));
@@ -872,8 +937,8 @@ export function App() {
                           updateExploration({ restore: undefined });
                         }}
                         aria-label="显示层级"
-                        disabled={!!focus}
-                        title={focus ? "聚焦模式按所选玩家的一跳或两跳关系显示" : undefined}
+                        disabled={!!focus || filtersActive || !!multi}
+                        title={multi ? "多人分析展示所选玩家与本页结果" : filtersActive ? "组合筛选覆盖全部已保存玩家，聚焦范围仍生效" : focus ? "聚焦模式按所选玩家的一跳或两跳关系显示" : undefined}
                       >
                         {[1, 2, 3]
                           .filter((value) => value <= run.depth)
@@ -892,6 +957,8 @@ export function App() {
                           updateExploration({ restore: undefined });
                         }}
                         aria-label="图谱显示节点上限"
+                        disabled={!!multi}
+                        title={multi ? "多人分析按结果分页绘图" : undefined}
                       >
                         {[100, 250, 500, 1000].map((value) => (
                           <option value={value} key={value}>
@@ -915,6 +982,8 @@ export function App() {
                 </div>
               )}
               {run && <GraphExplorationTools key={run.id} run={run} selected={selected} focus={focus} communities={projection.communities} protectedIds={protectedIds} disabled={!graphReady} onFocus={focusGraph} onCollapse={ids => updateExploration({ collapsed: ids, restore: undefined })} onCapture={captureGraphView} onLoad={loadGraphView} />}
+              {run && <GraphFilterPanel key={`filters-${run.id}`} run={run} filters={filters} tags={personalTags} data={filtersActive ? filterQuery.data : undefined} busy={filtersActive && filterQuery.isFetching} error={filtersActive ? filterQuery.error : null} onApply={applyFilters} onPage={page => { analysisGeneration.current++; setAnalysis(null); clearMulti(); updateExploration({ filterPage: page, restore: undefined }); }} onSelect={selectFilterPlayer} onRetry={() => void filterQuery.refetch()} />}
+              {multi && <div className="discovery-context" role="status">多人分析子图 · 所选玩家与本页共同好友 · 独立于组合筛选和显示层级<Button size="sm" variant="ghost" onClick={clearMulti}>退出多人子图</Button></div>}
               <div className={cn("graph-canvas", !run && "empty-canvas")}>
                 {!run ? (
                   current.isLoading ? (
@@ -930,7 +999,7 @@ export function App() {
                       blocked={!config.data}
                     />
                   )
-                ) : graphQuery.isLoading ? (
+                ) : !multi && graphQuery.isLoading ? (
                   <div className="canvas-loading">
                     <LoaderCircle className="spin" />
                     正在绘制你的好友网络…
@@ -949,7 +1018,7 @@ export function App() {
                       runId={run!.id}
                       nodes={projection.nodes}
                       edges={projection.edges}
-                      rootId={graph?.focus?.playerId ?? run.rootId}
+                      rootId={multi?.playerIds[0] ?? graph?.focus?.playerId ?? run.rootId}
                       selectedId={selectedId}
                       highlightIds={highlights}
                       layout={layout}
@@ -969,7 +1038,7 @@ export function App() {
                     <span>
                       {busy
                         ? "采集结果将在这里实时出现"
-                        : "调整显示层级或重新采集"}
+                        : filtersActive ? "当前条件没有可显示的玩家，可调整条件或查看资料未知的玩家" : "调整显示层级或重新采集"}
                     </span>
                   </div>
                 )}
@@ -987,7 +1056,7 @@ export function App() {
                   <div className="graph-legend">
                     <span>
                       <i className="legend-root" />
-                      {graph?.focus ? "聚焦中心" : "查询起点"}
+                      {multi ? "首位所选玩家" : graph?.focus ? "聚焦中心" : "查询起点"}
                     </span>
                     <span>
                       <i className="legend-friend" />
@@ -997,8 +1066,8 @@ export function App() {
                       <i className="legend-private" />
                       不可访问
                     </span>
-                    {analysis && (
-                      <button onClick={() => setAnalysis(null)}>
+                    {(analysis || multi) && (
+                      <button onClick={() => { analysisGeneration.current++; setAnalysis(null); clearMulti(); }}>
                         <X size={11} />
                         清除分析高亮
                       </button>
@@ -1010,13 +1079,21 @@ export function App() {
                 <span>
                   <Activity size={12} />
                   {run
-                    ? projection.communities.some(group => group.collapsed)
+                    ? multi
+                      ? `多人子图 ${format(multi.nodes.length)} 位 · 本页共同好友 ${format(multi.rows.length)} / ${format(multi.total)} 位`
+                      : filtersActive && filterQuery.data
+                      ? `筛选结果 ${format(filterQuery.data.total)} 位 · 画布代表 ${format(projection.representedPlayers)} 位${analysis ? "（含连接分析上下文）" : ""}`
+                      : projection.communities.some(group => group.collapsed)
                       ? `画布 ${format(projection.nodes.length)} 个节点，代表 ${format(projection.representedPlayers)} / ${format(graph?.totalNodes ?? run.nodeCount)} 位玩家`
                       : `画布显示 ${format(merged.nodes.length)} / ${format(graph?.totalNodes ?? run.nodeCount)} 个已采集节点`
                     : "准备好发现新的连接了吗？"}
                 </span>
                 <span>
-                  {graph?.focus
+                  {multi
+                    ? "仅显示所选玩家与当前结果页的已知连接"
+                    : filtersActive
+                    ? `筛选全部已保存玩家${focus ? ` · 叠加 ${focus.hops} 跳聚焦` : ""} · 画布上限 ${displayLimit}`
+                    : graph?.focus
                     ? `聚焦 ${graph.focus.hops} 跳 · 范围内共 ${format(graph.focus.totalNodes)} 位 · 仅含已采集关系`
                     : graph?.truncated
                     ? "已限制显示 · 分析仍使用全部已采集数据"
@@ -1127,6 +1204,7 @@ export function App() {
                   <GitBranch size={14} />
                   连接分析
                 </button>
+                <button className={cn(rightTab === "multi" && "active")} onClick={() => setRightTab("multi")}><Users size={14} />多人共同好友</button>
               </div>
               {rightTab === "overview" ? (
                 <>
@@ -1348,7 +1426,7 @@ export function App() {
                     </p>
                   </section>
                 </>
-              ) : (
+              ) : rightTab === "analysis" ? (
                 <section className="analysis-section">
                   <div className="inspector-heading">
                     <h3>发现彼此的连接</h3>
@@ -1393,9 +1471,9 @@ export function App() {
                       variant="secondary"
                       size="sm"
                       disabled={
-                        !run || !from || !to || from === to || analyze.isPending
+                        !run || !from || !to || from === to || analysisPending
                       }
-                      onClick={() => analyze.mutate("mutual")}
+                      onClick={() => analyzePair("mutual")}
                     >
                       <Users size={13} />
                       共同好友
@@ -1403,15 +1481,15 @@ export function App() {
                     <Button
                       size="sm"
                       disabled={
-                        !run || !from || !to || from === to || analyze.isPending
+                        !run || !from || !to || from === to || analysisPending
                       }
-                      onClick={() => analyze.mutate("path")}
+                      onClick={() => analyzePair("path")}
                     >
                       <GitBranch size={13} />
                       最短路径
                     </Button>
                   </div>
-                  {analyze.isPending && (
+                  {analysisPending && (
                     <div className="analysis-empty">
                       <LoaderCircle className="spin" size={23} />
                       正在分析已采集网络…
@@ -1481,7 +1559,7 @@ export function App() {
                       </Button>
                     </div>
                   )}
-                  {!analysis && !analyze.isPending && (
+                  {!analysis && !analysisPending && (
                     <div className="analysis-empty">
                       <GitBranch size={32} />
                       <strong>朋友的朋友，可能也是朋友</strong>
@@ -1495,7 +1573,10 @@ export function App() {
                     </p>
                   </div>
                 </section>
-              )}
+              ) : null}
+              <div hidden={rightTab !== "multi"}>
+                <MultiFriendPanel key={`multi-${run?.id ?? "none"}`} run={run} resetKey={multiResetKey} onShow={showMulti} onClear={() => setMultiResult(null)} onSelect={selectMatchedPlayer} />
+              </div>
               <div className="inspector-footer">
                 <CircleHelp size={13} />
                 <span>以连接为线索，让探索更有方向</span>

@@ -54,6 +54,15 @@ it("accepts complete restore state and normalizes named views", () => {
   expect(savedViewInputSchema.safeParse({ name: "x".repeat(61), state: state() }).success).toBe(false);
 });
 
+it("preserves optional combined filters while accepting old saved states", () => {
+  const filters = { minScore: 15, community: null, gameAppId: "570", groupId: "", fetchStatus: "all" as const, tag: "朋友", unknown: "include" as const };
+  expect(savedViewInputSchema.parse({ name: "Filtered", state: state({ filters }) }).state.filters).toEqual(filters);
+  expect(savedViewInputSchema.parse({ name: "Legacy", state: state() }).state).not.toHaveProperty("filters");
+  for (const patch of [{ minScore: -1 }, { community: -1 }, { gameAppId: "bad" }, { groupId: ids[0] }, { tag: "x".repeat(25) }, { unknown: "all" }]) {
+    expect(savedViewInputSchema.safeParse({ name: "Invalid", state: state({ filters: { ...filters, ...patch } as typeof filters }) }).success).toBe(false);
+  }
+});
+
 it("rejects malformed restore state and out-of-bound graph coordinates", () => {
   const invalid: Partial<GraphViewState>[] = [
     { version: 2 as 1 }, { layout: "force" as "grid" }, { displayDepth: 4 }, { displayLimit: 501 },
@@ -91,7 +100,7 @@ databaseIt("creates, lists, reloads, overwrites and deletes named views without 
   expect(saved.updatedAt).toMatch(/Z$/);
   expect((await app.inject(endpoint())).json().views).toEqual([{ id: saved.id, runId, name: "First", createdAt: saved.createdAt, updatedAt: saved.updatedAt }]);
   expect((await app.inject(endpoint(runId, saved.id))).json()).toEqual(saved);
-  const next = state({ layout: "grid", selectedId: null, focus: null, viewport: null });
+  const next = state({ layout: "grid", selectedId: null, focus: null, viewport: null, filters: { minScore: 0, community: null, gameAppId: "570", groupId: "", fetchStatus: "all", tag: "朋友", unknown: "include" } });
   const updated = await app.inject({ method: "PUT", url: endpoint(runId, saved.id), payload: { name: "Revised", state: next } });
   expect(updated.statusCode).toBe(200);
   expect(updated.json()).toMatchObject({ id: saved.id, name: "Revised", state: next, createdAt: saved.createdAt });

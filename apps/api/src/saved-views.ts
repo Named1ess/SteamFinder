@@ -7,6 +7,7 @@ import { config } from "./config.js";
 import { pool, transaction } from "./db.js";
 import { validSteamId } from "./identity.js";
 import { getRun, HttpError } from "./repository.js";
+import { graphFiltersSchema } from "./graph-filter-schema.js";
 
 const playerId = z.string().refine(validSteamId);
 const coordinate = z.number().finite().min(-1e7).max(1e7);
@@ -21,6 +22,7 @@ export const graphViewStateSchema = z.object({
   displayLimit: z.union([z.literal(100), z.literal(250), z.literal(500), z.literal(1000)]),
   selectedId: playerId.nullable(),
   search: z.string().max(200).optional(),
+  filters: graphFiltersSchema.optional(),
   focus: z.object({ playerId, hops: z.union([z.literal(1), z.literal(2)]) }).strict().nullable(),
   collapsedCommunities: z.array(z.number().int().nonnegative()).max(10000),
   positions: z.record(positionId, point).refine((positions) => Object.keys(positions).length <= 10000),

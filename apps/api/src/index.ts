@@ -18,6 +18,8 @@ import { getRunGroups, startGroupCollectionJob, recoverGroupCollectionJobs } fro
 import { collectPlayerDetails, getPlayerDetails } from "./player-details.js";
 import { playerSearchQuerySchema, searchRunPlayers } from "./player-search.js";
 import { registerSavedViewRoutes } from "./saved-views.js";
+import { registerGraphFilterRoutes } from "./graph-filters.js";
+import { registerMultiFriendRoutes } from "./multi-friends.js";
 import { getRelationshipScores, relationshipScoresQuerySchema, relationshipPageQuerySchema, getRelationshipScorePage, getRelationshipOverview, getRelationshipScoreDetail } from "./relationship-scores.js";
 const app = Fastify({ logger: false, bodyLimit: 8192 });
 const provider =
@@ -75,6 +77,8 @@ app.get("/api/config", async () => ({
 }));
 app.get("/api/runs", async () => ({ runs: await listRuns() }));
 registerSavedViewRoutes(app);
+registerGraphFilterRoutes(app);
+registerMultiFriendRoutes(app);
 app.get("/api/players/:id/details", async (request) => getPlayerDetails((request.params as { id: string }).id));
 app.post("/api/players/:id/details", async (request) => {
   const options = parse(z.object({ refresh: z.boolean().optional() }).strict(), request.body ?? {});

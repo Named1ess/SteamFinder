@@ -65,6 +65,75 @@ export interface PlayerAnnotation {
   note: string;
   tags: string[];
 }
+export interface GraphFilters {
+  minScore: number | null;
+  community: number | null;
+  gameAppId: string;
+  groupId: string;
+  fetchStatus: FetchStatus | "all";
+  tag: string;
+  unknown: "exclude" | "include" | "only";
+}
+export interface GraphFilterRequest {
+  filters: GraphFilters;
+  tagPlayerIds?: string[];
+  selectedId?: string | null;
+  focus?: GraphFocus | null;
+  limit: number;
+  page: number;
+}
+export interface GraphFilterRow {
+  player: GraphNode;
+  score: number | null;
+  status: "match" | "unknown";
+  unknownReasons: string[];
+}
+export interface GraphFilterResponse {
+  graph: GraphResponse;
+  rows: GraphFilterRow[];
+  page: number;
+  pages: number;
+  pageSize: number;
+  total: number;
+  matched: number;
+  unknown: number;
+  excluded: number;
+  scopeTotal: number;
+  sourceVersion: string;
+}
+export interface GraphFilterOptions {
+  communities: { id: number; size: number }[];
+  games: { id: string; name: string; count: number }[];
+  groups: { id: string; name: string; count: number }[];
+  gamePlayers: number;
+  groupPlayers: number;
+  totalPlayers: number;
+  sourceVersion: string;
+}
+export interface MultiFriendRequest {
+  playerIds: string[];
+  minConnections: number;
+  page: number;
+}
+export interface MultiFriendRow {
+  player: GraphNode;
+  matchedIds: string[];
+  count: number;
+}
+export interface MultiFriendResponse {
+  runId: string;
+  playerIds: string[];
+  minConnections: number;
+  rows: MultiFriendRow[];
+  total: number;
+  page: number;
+  pages: number;
+  pageSize: number;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  complete: boolean;
+  message: string;
+}
 export interface GraphViewState extends GraphViewportSnapshot {
   version: 1;
   layout: "radial" | "circular" | "grid";
@@ -72,6 +141,7 @@ export interface GraphViewState extends GraphViewportSnapshot {
   displayLimit: number;
   selectedId: string | null;
   search?: string;
+  filters?: GraphFilters;
   focus: GraphFocus | null;
   collapsedCommunities: number[];
   annotations: Record<string, PlayerAnnotation>;

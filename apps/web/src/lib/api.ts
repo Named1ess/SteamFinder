@@ -9,6 +9,11 @@ import type {
   GraphViewState,
   SavedGraphView,
   SavedGraphViewSummary,
+  GraphFilterOptions,
+  GraphFilterRequest,
+  GraphFilterResponse,
+  MultiFriendRequest,
+  MultiFriendResponse,
   GameScoresResponse,
   PlayerDetailsSnapshot,
   PlayerSearchResponse,
@@ -31,6 +36,9 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 export const api = {
+  filterOptions: (id: string, signal?: AbortSignal) => request<GraphFilterOptions>(`/runs/${encodeURIComponent(id)}/filter-options`, { signal }),
+  filterGraph: (id: string, input: GraphFilterRequest, signal?: AbortSignal) => request<GraphFilterResponse>(`/runs/${encodeURIComponent(id)}/filter`, { method: "POST", body: JSON.stringify(input), signal }),
+  multiFriends: (id: string, input: MultiFriendRequest, signal?: AbortSignal) => request<MultiFriendResponse>(`/runs/${encodeURIComponent(id)}/multi-friends?${new URLSearchParams({ players: input.playerIds.join(","), minConnections: String(input.minConnections), page: String(input.page) })}`, { signal }),
   config: () => request<AppConfig>("/config"),
   playerDetails: (id: string) =>
     request<PlayerDetailsSnapshot>(
