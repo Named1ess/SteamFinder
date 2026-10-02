@@ -264,9 +264,14 @@ export default function NetworkGraph({
     });
     graph.on("canvas:dragstart", () => hoverRef.current.close());
     const observer = new ResizeObserver(() => {
-      void queue.enqueue("resize", () => {
+      void queue.enqueue("resize", async () => {
         const { width, height } = host.getBoundingClientRect();
-        if (width > 0 && height > 0) graph.setSize(width, height);
+        const [currentWidth, currentHeight] = graph.getSize();
+        if (width <= 0 || height <= 0 || (width === currentWidth && height === currentHeight)) return;
+        graph.setSize(width, height);
+        // A resized viewport should show the whole graph; data refreshes still
+        // preserve the camera and dragged node positions in sync().
+        if (rendered && !disposed) await graph.fitView(undefined, false);
       });
     });
     observer.observe(host);
