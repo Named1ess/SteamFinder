@@ -104,8 +104,85 @@ databaseIt(
       distance: null,
     });
     expect(result.coverage).toEqual({ completeLists: 603, totalLists: 604 });
-    expect(result.algorithmVersion).toBe("mutual-network-v1");
+    expect(result.algorithmVersion).toBe("mutual-network-groups-v2");
+    expect(result.groupJobId).toBeNull();
+    expect(result.rows[0].groups).toMatchObject({
+      contribution: 0,
+      similarity: null,
+    });
     expect(Number.isFinite(Date.parse(result.computedAt))).toBe(true);
+  },
+);
+
+databaseIt(
+  "adds only this run's pinned group evidence and excludes failed refreshes",
+  async () => {
+    const groupJobId = randomUUID();
+    const group = {
+      id: "103582791475930111",
+      name: "Shared fixture",
+      url: "https://steamcommunity.com/gid/103582791475930111/",
+      memberCount: 12,
+    };
+    try {
+      await pool.query(
+        "INSERT INTO group_collection_jobs(id,run_id,mode,root_id,status,max_requests) VALUES($1,$2,$3,$4,'completed',10)",
+        [groupJobId, runId, config.mode, ids[0]],
+      );
+      for (const id of [ids[0], ids[1], ids[550]]) {
+        await pool.query(
+          `INSERT INTO group_collection_players(job_id,player_id,is_root,depth,processed,status,groups,total_count,complete,fetched_at,attempted_at)
+         VALUES($1,$2,$3,1,true,'ok',$4,1,true,now(),now())`,
+          [groupJobId, id, id === ids[0], JSON.stringify([group])],
+        );
+      }
+      const result = await getRelationshipScores(runId);
+      expect(result.groupJobId).toBe(groupJobId);
+      expect(result.groupSourceUpdatedAt).toEqual(expect.any(String));
+      expect(result.rows.find((row) => row.player.id === ids[1])).toMatchObject(
+        {
+          networkScore: 15,
+          score: 23.5,
+          groups: { sharedCount: 1, similarity: 100, contribution: 8.5 },
+        },
+      );
+      expect(
+        result.rows.find((row) => row.player.id === ids[550]),
+      ).toMatchObject({
+        score: null,
+        groups: { sharedCount: 1, contribution: 0 },
+      });
+      expect((await getRelationshipScores(outsideRunId)).groupJobId).toBeNull();
+      // A global cache refresh must not silently rewrite this run's snapshots.
+      await pool.query(
+        "INSERT INTO group_profiles(mode,player_id,status,complete,groups,total_count) VALUES($1,$2,'ok',true,'[]',0) ON CONFLICT(mode,player_id) DO UPDATE SET groups='[]',total_count=0",
+        [config.mode, ids[0]],
+      );
+      expect(
+        (await getRelationshipScores(runId)).rows.find(
+          (row) => row.player.id === ids[1],
+        )?.score,
+      ).toBe(23.5);
+      await pool.query(
+        "UPDATE group_collection_players SET status='error',complete=false WHERE job_id=$1 AND player_id=$2",
+        [groupJobId, ids[1]],
+      );
+      const failed = await getRelationshipScores(runId);
+      expect(failed.rows.find((row) => row.player.id === ids[1])).toMatchObject(
+        {
+          score: 15,
+          groups: { similarity: null, contribution: 0, playerStatus: "error" },
+        },
+      );
+    } finally {
+      await pool.query("DELETE FROM group_collection_jobs WHERE id=$1", [
+        groupJobId,
+      ]);
+      await pool.query(
+        "DELETE FROM group_profiles WHERE mode=$1 AND player_id=$2",
+        [config.mode, ids[0]],
+      );
+    }
   },
 );
 

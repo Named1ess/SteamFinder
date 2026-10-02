@@ -3,6 +3,7 @@ import { config } from "./config.js";
 export const boss = new PgBoss({ connectionString: config.databaseUrl });
 export const QUEUE = `steamfinder-crawl-${config.mode}`;
 export const GAME_QUEUE = `steamfinder-game-scores-${config.mode}`;
+export const GROUP_QUEUE = `steamfinder-groups-${config.mode}`;
 boss.on("error", () => console.error("Background queue connection failed"));
 export async function startQueue() {
   await boss.start();
@@ -16,6 +17,14 @@ export async function startQueue() {
     retryDelay: 5,
     expireInSeconds: 36000,
   });
+  await boss.createQueue(GROUP_QUEUE, {
+    retryLimit: 5,
+    retryDelay: 5,
+    expireInSeconds: 36000,
+  });
+}
+export async function enqueueGroups(id: string) {
+  await boss.send(GROUP_QUEUE, { id }, { retryLimit: 5, retryDelay: 5, expireInSeconds: 36000 });
 }
 export async function enqueueGameScores(id: string) {
   await boss.send(

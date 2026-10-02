@@ -87,11 +87,16 @@ export interface RelationshipScoreRow {
   };
   commonFriends: PlayerSearchOption[];
   evidence: "complete" | "partial";
+  /** Friend-network score before the optional shared-group bonus. */
+  networkScore?: number | null;
+  groups?: GroupScoreEvidence;
 }
 export interface RelationshipScoresResponse {
   runId: string;
   center: PlayerSearchOption;
-  algorithmVersion: "mutual-network-v1";
+  algorithmVersion: "mutual-network-v1" | "mutual-network-groups-v2";
+  groupJobId?: string | null;
+  groupSourceUpdatedAt?: string | null;
   computedAt: string;
   sourceUpdatedAt: string;
   totalPlayers: number;
@@ -243,3 +248,65 @@ export interface GameScoresResponse {
   rows: GameScoreRow[];
 }
 export const DEFAULT_ROOT = "76561199521553744";
+
+export interface SteamGroup {
+  /** Stable Steam clan ID; this is not a player Steam ID. */
+  id: string;
+  name: string;
+  url: string;
+  memberCount: number | null;
+}
+export interface PublicGroups {
+  groups: SteamGroup[];
+  totalCount: number;
+}
+export interface GroupSnapshot {
+  playerId: string;
+  status: FetchStatus;
+  groups: SteamGroup[];
+  totalCount: number | null;
+  complete: boolean;
+  fetchedAt: string | null;
+  attemptedAt: string | null;
+  message: string | null;
+}
+export interface GroupCollectionJob {
+  id: string;
+  runId: string;
+  status: RunStatus;
+  maxRequests: number;
+  requestCount: number;
+  cacheHits: number;
+  totalPlayers: number;
+  processedPlayers: number;
+  message: string | null;
+  createdAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+}
+export interface RunGroupsResponse {
+  runId: string;
+  job: GroupCollectionJob | null;
+  updatedAt: string | null;
+  coverage: {
+    availablePlayers: number;
+    unavailablePlayers: number;
+    pendingPlayers: number;
+    totalPlayers: number;
+  };
+}
+export interface GroupScoreEvidence {
+  similarity: number | null;
+  sharedCount: number;
+  unionCount: number;
+  centerCount: number | null;
+  playerCount: number | null;
+  centerStatus: FetchStatus;
+  playerStatus: FetchStatus;
+  centerFetchedAt: string | null;
+  playerFetchedAt: string | null;
+  /** At most 20 examples; sharedCount includes all matching groups. */
+  commonGroups: SteamGroup[];
+  reason: string;
+  contribution: number;
+}

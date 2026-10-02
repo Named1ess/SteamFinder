@@ -191,3 +191,51 @@ export const playerDetails = pgTable(
   },
   (t) => [primaryKey({ columns: [t.mode, t.playerId] })],
 );
+export const groupProfiles = pgTable(
+  "group_profiles",
+  {
+    mode: text("mode").notNull(),
+    playerId: text("player_id").notNull(),
+    status: text("status").notNull().default("unknown"),
+    groups: jsonb("groups").notNull().default([]),
+    totalCount: integer("total_count"),
+    complete: boolean("complete").notNull().default(false),
+    fetchedAt: time("fetched_at"),
+    attemptedAt: time("attempted_at"),
+    message: text("message"),
+  },
+  (t) => [primaryKey({ columns: [t.mode, t.playerId] })],
+);
+export const groupCollectionJobs = pgTable("group_collection_jobs", {
+  id: uuid("id").primaryKey(),
+  runId: uuid("run_id").notNull().references(() => runs.id, { onDelete: "cascade" }),
+  mode: text("mode").notNull(),
+  rootId: text("root_id").notNull(),
+  status: text("status").notNull().default("queued"),
+  refresh: boolean("refresh").notNull().default(false),
+  maxRequests: integer("max_requests").notNull(),
+  requestCount: integer("request_count").notNull().default(0),
+  cacheHits: integer("cache_hits").notNull().default(0),
+  message: text("message"),
+  createdAt: time("created_at").notNull().defaultNow(),
+  updatedAt: time("updated_at").notNull().defaultNow(),
+  completedAt: time("completed_at"),
+});
+export const groupCollectionPlayers = pgTable(
+  "group_collection_players",
+  {
+    jobId: uuid("job_id").notNull().references(() => groupCollectionJobs.id, { onDelete: "cascade" }),
+    playerId: text("player_id").notNull(),
+    isRoot: boolean("is_root").notNull().default(false),
+    depth: integer("depth").notNull(),
+    processed: boolean("processed").notNull().default(false),
+    status: text("status").notNull().default("unknown"),
+    groups: jsonb("groups").notNull().default([]),
+    totalCount: integer("total_count"),
+    complete: boolean("complete").notNull().default(false),
+    fetchedAt: time("fetched_at"),
+    attemptedAt: time("attempted_at"),
+    message: text("message"),
+  },
+  (t) => [primaryKey({ columns: [t.jobId, t.playerId] })],
+);

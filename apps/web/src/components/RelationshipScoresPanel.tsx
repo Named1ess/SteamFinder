@@ -5,6 +5,7 @@ import {
   ChevronRight,
   CircleHelp,
   Database,
+  ExternalLink,
   GitBranch,
   Layers3,
   LoaderCircle,
@@ -14,6 +15,7 @@ import {
 } from "lucide-react";
 import type {
   CrawlRun,
+  FetchStatus,
   PlayerSearchOption,
   RelationshipLayer,
   RelationshipScoreRow,
@@ -21,6 +23,7 @@ import type {
 } from "../../../../packages/shared/src/index";
 import { api } from "../lib/api";
 import { activeRun, initials } from "../lib/graph";
+import { createGroupScoreSync } from "../lib/group-collection";
 import {
   filterRelationshipScores,
   layerColors,
@@ -30,12 +33,21 @@ import {
   relationshipRingNodes,
 } from "../lib/relationship-scores";
 import { PlayerCombobox } from "./PlayerCombobox";
+import { GroupCollectionPanel } from "./GroupCollectionPanel";
 import { ProfileHoverTrigger } from "./ProfileHoverCard";
 import { Badge, Button, Input, cn } from "./ui";
 
 const format = (value: number) => value.toLocaleString("zh-CN");
 const scoreText = (value: number | null) =>
   value === null ? "—" : value.toFixed(1);
+const groupStatusText: Record<FetchStatus, string> = {
+  unknown: "尚未采集",
+  ok: "已读取公开样本",
+  private: "列表不可访问",
+  error: "读取失败或样本不完整",
+};
+const sampleDate = (value: string | null | undefined) =>
+  value ? new Date(value).toLocaleString("zh-CN") : "尚无成功快照";
 const layerRanges: Record<RelationshipLayer, string> = {
   core: "≥ 60 分",
   close: "35–<60 分",
@@ -200,6 +212,61 @@ function RelationshipRings({
   );
 }
 
+function GroupEvidence({ row }: { row: RelationshipScoreRow }) {
+  const groups = row.groups;
+  const snapshots = [
+    {
+      label: "评分中心",
+      status: groups?.centerStatus ?? "unknown",
+      count: groups?.centerCount,
+      fetchedAt: groups?.centerFetchedAt,
+    },
+    {
+      label: "当前玩家",
+      status: groups?.playerStatus ?? "unknown",
+      count: groups?.playerCount,
+      fetchedAt: groups?.playerFetchedAt,
+    },
+  ] satisfies { label: string; status: FetchStatus; count?: number | null; fetchedAt?: string | null }[];
+  return (
+    <div className="relationship-group-evidence">
+      <div className="relationship-group-evidence-heading">
+        <h4><Users size={14} />共同群组</h4>
+        <span>辅助加成 · 最多 10 分</span>
+      </div>
+      <div className="relationship-group-overlap">
+        <span>完整列表重合度<strong>{groups?.similarity == null ? "无法比较" : `${groups.similarity.toFixed(1)}%`}</strong></span>
+        <span>交集 / 并集<strong>{groups?.similarity == null ? "—" : `${format(groups.sharedCount)} / ${format(groups.unionCount)}`}</strong></span>
+      </div>
+      <div className="relationship-group-snapshots">
+        {snapshots.map((snapshot) => (
+          <div key={snapshot.label}>
+            <span>{snapshot.label}<strong>{snapshot.count == null ? "数量未知" : `${format(snapshot.count)} 个群组`}</strong></span>
+            <small>{groupStatusText[snapshot.status]}</small>
+            <small>成功快照：{sampleDate(snapshot.fetchedAt)}</small>
+          </div>
+        ))}
+      </div>
+      <p className="relationship-group-reason">{groups?.reason || "尚无双方完整公开群组样本，保持网络原分。"}</p>
+      {!!groups?.commonGroups.length && (
+        <div className="relationship-shared-groups">
+          <span>共同群组 {format(groups.sharedCount)} 个<small>仅展示前 20 个</small></span>
+          <ul>
+            {groups.commonGroups.slice(0, 20).map((group) => (
+              <li key={group.id}>
+                <a href={`https://steamcommunity.com/gid/${encodeURIComponent(group.id)}/`} target="_blank" rel="noopener noreferrer" title={`${group.name} · 在 Steam 打开`}>
+                  <span>{group.name}</span><ExternalLink size={11} />
+                </a>
+                {group.memberCount !== null && <small>{format(group.memberCount)} 位成员</small>}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RelationshipDetail({
   row,
   layers,
@@ -207,6 +274,8 @@ function RelationshipDetail({
   row: RelationshipScoreRow;
   layers: RelationshipScoresResponse["layers"];
 }) {
+  const networkScore = row.networkScore === undefined ? row.score : row.networkScore;
+  const groupBonus = row.groups?.contribution ?? 0;
   const components = [
     {
       label: "直接好友边",
@@ -267,12 +336,19 @@ function RelationshipDetail({
         <p className="relationship-evidence-note">
           已采集的网络中暂无通向此玩家的路径，因此不评分。私密或尚未采集的好友列表可能隐藏连接。
         </p>
-      ) : row.score === 0 ? (
+      ) : networkScore === 0 ? (
         <p className="relationship-evidence-note">
-          已有已知路径，但三跳内的评分证据不足，当前为 0
-          分；这不表示现实中互不相识。
+          已有已知路径，但三跳内的网络评分证据不足，网络原分为 0
+          分；这不表示现实中互不相识。群组证据可单独提供辅助加成。
         </p>
       ) : null}
+      <div className="relationship-score-equation" aria-label="网络原分加群组加成得到最终分">
+        <span>网络原分<strong>{scoreText(networkScore)}</strong></span>
+        <i aria-hidden="true">+</i>
+        <span className="relationship-bonus">群组加成<strong>{groupBonus.toFixed(1)}</strong></span>
+        <i aria-hidden="true">=</i>
+        <span>最终分<strong>{scoreText(row.score)}</strong></span>
+      </div>
       <div className="relationship-components">
         {components.map((item) => (
           <div key={item.label}>
@@ -333,8 +409,8 @@ function RelationshipDetail({
         <p>
           <strong>
             {row.evidence === "complete"
-              ? "评分所需局部邻域样本完整"
-              : "评分所需局部邻域样本不完整"}
+              ? "网络原分所需局部邻域样本完整"
+              : "网络原分所需局部邻域样本不完整"}
           </strong>
           <span>
             完整要求双方及相邻玩家的好友列表采集成功、在 24
@@ -342,6 +418,7 @@ function RelationshipDetail({
           </span>
         </p>
       </div>
+      <GroupEvidence row={row} />
     </aside>
   );
 }
@@ -354,6 +431,10 @@ export function RelationshipScoresPanel({ run }: { run?: CrawlRun }) {
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const [showFormula, setShowFormula] = useState(false);
+  const syncGroupScores = useMemo(
+    () => createGroupScoreSync(client, run?.id),
+    [client, run?.id],
+  );
   const query = useQuery({
     queryKey: ["relationship-scores", run?.id, centerId],
     queryFn: ({ signal }) => api.relationshipScores(run!.id, centerId, signal),
@@ -422,7 +503,7 @@ export function RelationshipScoresPanel({ run }: { run?: CrawlRun }) {
               关系分层 <Badge>全部已采集玩家</Badge>
               {run?.mode === "demo" && <Badge tone="amber">演示数据</Badge>}
             </h2>
-            <p>围绕一位玩家，按好友网络中的连接证据查看关系分数。</p>
+            <p>围绕一位玩家，以好友网络为基础，结合公开共同群组查看关系分数。</p>
           </div>
         </div>
         <Button
@@ -439,14 +520,14 @@ export function RelationshipScoresPanel({ run }: { run?: CrawlRun }) {
       <div className="relationship-scope">
         <ShieldCheck size={15} />
         <p>
-          这是项目自定义的网络结构分数，不代表现实亲密程度或概率。仅使用已保存的好友网络，与游戏相关度独立；进入面板和切换中心不会发起
+          这是项目自定义的关系分数，不代表现实亲密程度或概率。使用已保存的好友网络与公开群组样本，与游戏相关度独立；进入面板和切换中心不会发起
           Steam 采集。
         </p>
       </div>
       {showFormula && (
         <div className="relationship-formula" id="relationship-formula">
           <strong>
-            分数 = 15 × 直接边 + 45 × RA₂ / (RA₂ + 1) + 25 × Jaccard + 15 × RA₃
+            网络原分 B = 15 × 直接边 + 45 × RA₂ / (RA₂ + 1) + 25 × 邻居 Jaccard + 15 × RA₃
             / (RA₃ + 1)
           </strong>
           <p>
@@ -460,8 +541,13 @@ export function RelationshipScoresPanel({ run }: { run?: CrawlRun }) {
             比较双方邻居集合的交集与并集，先从集合中排除对方。各项先保留一位小数后求和。公式权重与层级阈值是项目选择，未做现实亲密度校准；不完整的网络样本会改变结果。
           </p>
           <p>
+            群组加成 = (100 − B) × 10% × 群组 J；最终分 = B + 群组加成，保留一位小数。
+            群组 J 是双方完整公开群组列表的交集数 ÷ 并集数，范围 0–1，界面显示为百分比。
+            群组加成最多 10 分，只作辅助证据；没有交集、空列表、不可见、失败或不完整的样本均不扣分。
+          </p>
+          <p>
             分数层级与最短好友跳数分别计算。暂无已知路径时不评分；已连接但超过三跳的玩家可能为
-            0 分。
+            0 分。共同群组不能建立好友路径，网络原分无法计算时仍不评分。
           </p>
         </div>
       )}
@@ -505,6 +591,7 @@ export function RelationshipScoresPanel({ run }: { run?: CrawlRun }) {
           )}
         </div>
       </div>
+      <GroupCollectionPanel run={run} onSnapshot={syncGroupScores} />
       {query.isError && centerId && (
         <div className="relationship-notice" role="alert">
           <CircleHelp size={15} />

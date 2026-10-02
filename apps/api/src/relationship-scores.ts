@@ -3,6 +3,8 @@ import type { RelationshipScoresResponse } from "../../../packages/shared/src/in
 import { validSteamId } from "./identity.js";
 import { getGraphData, getRun, HttpError } from "./repository.js";
 import { scoreRelationshipGraph } from "./relationship-scoring.js";
+import { applyRelationshipGroups } from "./group-scoring.js";
+import { getRunGroupSnapshots } from "./group-scores.js";
 
 export const relationshipScoresQuerySchema = z.object({
   center: z.string().refine(validSteamId).optional(),
@@ -23,17 +25,23 @@ export async function getRelationshipScores(
     throw new HttpError(400, "关系中心不属于该查询");
   }
   const now = Date.now();
+  const groups = await getRunGroupSnapshots(runId);
   return {
     runId,
-    algorithmVersion: "mutual-network-v1",
+    algorithmVersion: "mutual-network-groups-v2",
     computedAt: new Date(now).toISOString(),
     sourceUpdatedAt: run.updatedAt,
-    ...scoreRelationshipGraph(
-      center,
-      data.nodes,
-      data.edges,
-      data.fullyRepresented,
-      now,
+    groupJobId: groups.jobId,
+    groupSourceUpdatedAt: groups.updatedAt,
+    ...applyRelationshipGroups(
+      scoreRelationshipGraph(
+        center,
+        data.nodes,
+        data.edges,
+        data.fullyRepresented,
+        now,
+      ),
+      groups.snapshots,
     ),
   };
 }

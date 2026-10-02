@@ -95,3 +95,28 @@ CREATE TABLE IF NOT EXISTS player_details (
   aliases_fetched_at timestamptz, aliases_attempted_at timestamptz, aliases_message text,
   PRIMARY KEY(mode,player_id)
 );
+CREATE TABLE IF NOT EXISTS group_profiles (
+  mode text NOT NULL, player_id text NOT NULL, status text NOT NULL DEFAULT 'unknown',
+  groups jsonb NOT NULL DEFAULT '[]', total_count integer, complete boolean NOT NULL DEFAULT false,
+  fetched_at timestamptz, attempted_at timestamptz, message text,
+  PRIMARY KEY(mode,player_id)
+);
+CREATE TABLE IF NOT EXISTS group_collection_jobs (
+  id uuid PRIMARY KEY, run_id uuid NOT NULL REFERENCES crawl_runs(id) ON DELETE CASCADE,
+  mode text NOT NULL, root_id text NOT NULL, status text NOT NULL DEFAULT 'queued',
+  refresh boolean NOT NULL DEFAULT false, max_requests integer NOT NULL,
+  request_count integer NOT NULL DEFAULT 0, cache_hits integer NOT NULL DEFAULT 0,
+  message text, created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now(), completed_at timestamptz
+);
+CREATE TABLE IF NOT EXISTS group_collection_players (
+  job_id uuid NOT NULL REFERENCES group_collection_jobs(id) ON DELETE CASCADE,
+  player_id text NOT NULL, is_root boolean NOT NULL DEFAULT false, depth integer NOT NULL,
+  processed boolean NOT NULL DEFAULT false, status text NOT NULL DEFAULT 'unknown',
+  groups jsonb NOT NULL DEFAULT '[]', total_count integer, complete boolean NOT NULL DEFAULT false,
+  fetched_at timestamptz, attempted_at timestamptz, message text,
+  PRIMARY KEY(job_id,player_id)
+);
+CREATE INDEX IF NOT EXISTS group_job_history ON group_collection_jobs(mode,run_id,created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS group_job_active ON group_collection_jobs(mode,run_id) WHERE status IN ('queued','running');
+CREATE INDEX IF NOT EXISTS group_job_pending ON group_collection_players(job_id,is_root DESC,depth,player_id) WHERE NOT processed;

@@ -11,9 +11,10 @@ import {
   HttpError,
 } from "./repository.js";
 import { graphResponse, analyze } from "./graph.js";
-import { boss, startQueue, enqueue, enqueueGameScores } from "./queue.js";
+import { boss, startQueue, enqueue, enqueueGameScores, enqueueGroups } from "./queue.js";
 import { createSearch } from "./search.js";
 import { getGameScores, startGameScoreJob } from "./game-scores.js";
+import { getRunGroups, startGroupCollectionJob, recoverGroupCollectionJobs } from "./group-scores.js";
 import { collectPlayerDetails, getPlayerDetails } from "./player-details.js";
 import { playerSearchQuerySchema, searchRunPlayers } from "./player-search.js";
 import { getRelationshipScores, relationshipScoresQuerySchema } from "./relationship-scores.js";
@@ -87,6 +88,17 @@ app.get("/api/runs/:id/players", async (request) =>
   searchRunPlayers(idFrom(request), parse(playerSearchQuerySchema, request.query)),
 );
 app.get("/api/runs/:id/game-scores", async (request) => getGameScores(idFrom(request)));
+app.get("/api/runs/:id/groups", async (request) => getRunGroups(idFrom(request)));
+app.post("/api/runs/:id/groups", async (request) => {
+  const id = idFrom(request);
+  const options = parse(z.object({
+    refresh: z.boolean().optional(),
+    maxRequests: z.number().int().min(1).max(10000).default(500),
+  }).strict(), request.body ?? {});
+  const submission = await startGroupCollectionJob(id, options);
+  if (submission.enqueue) await enqueueGroups(submission.jobId);
+  return getRunGroups(id);
+});
 app.get("/api/runs/:id/relationship-scores", async (request) =>
   getRelationshipScores(idFrom(request), parse(relationshipScoresQuerySchema, request.query).center),
 );
@@ -217,6 +229,8 @@ app.get("/api/runs/:id/events", async (request, reply) => {
   });
 });
 await startQueue();
+// Recover an API crash between committing a group job and sending its queue entry.
+for (const id of await recoverGroupCollectionJobs()) await enqueueGroups(id);
 await app.listen({ port: config.port, host: "0.0.0.0" });
 for (const signal of ["SIGINT", "SIGTERM"] as const)
   process.on(signal, async () => {

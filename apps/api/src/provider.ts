@@ -2,8 +2,10 @@ import { DEFAULT_ROOT } from "../../../packages/shared/src/index.js";
 import { validSteamId } from "./identity.js";
 import { parseFriendsPage, parseProfilePage } from "./community.js";
 import { parsePublicGames } from "./community-games.js";
+import { parsePublicGroups } from "./community-groups.js";
 import type {
   PublicGames,
+  PublicGroups,
   PublicProfileDetails,
   ProfileAlias,
 } from "../../../packages/shared/src/index.js";
@@ -26,6 +28,7 @@ export interface Provider {
   summaries(ids: string[]): Promise<Player[]>;
   vanity(name: string): Promise<string>;
   games?(id: string): Promise<PublicGames>;
+  groups?(id: string): Promise<PublicGroups>;
   profile?(id: string): Promise<PublicProfileDetails>;
   aliases?(id: string): Promise<ProfileAlias[]>;
 }
@@ -55,23 +58,28 @@ export class PublicWebProvider implements Provider {
       });
       if (!response.ok) {
         await response.body?.cancel();
-        const friendPage = /^profiles\/(\d{17})\/friends\/$/.exec(path);
+        const listPage = /^profiles\/(\d{17})\/(friends|groups)\/$/.exec(path);
         const location = response.headers.get("location");
-        // Hidden friend lists can redirect to the same player's profile. Mark
+        // Hidden lists can redirect to the same player's profile. Mark
         // that list unavailable without following another unbudgeted request.
         if (
-          friendPage &&
+          listPage &&
           location &&
           [301, 302, 303, 307, 308].includes(response.status)
         ) {
-          let target: string | undefined;
+          let isSameProfile = false;
           try {
-            target = new URL(location, url).href.replace(/\/$/, "");
+            const target = new URL(location, url);
+            isSameProfile =
+              target.origin === "https://steamcommunity.com" &&
+              !target.username &&
+              !target.password &&
+              target.pathname.replace(/\/$/, "") === `/profiles/${listPage[1]}`;
           } catch {}
-          if (target === `https://steamcommunity.com/profiles/${friendPage[1]}`)
+          if (isSameProfile)
             throw new SteamError(
               "private",
-              "好友页不可访问，Steam 已跳转至个人资料页",
+              `${listPage[2] === "groups" ? "群组" : "好友"}页不可访问，Steam 已跳转至个人资料页`,
             );
         }
         throw classifyStatus(response.status);
@@ -127,6 +135,10 @@ export class PublicWebProvider implements Provider {
       profile: parsePublicProfile(html, id),
     };
   }
+  async groups(id: string): Promise<PublicGroups> {
+    if (!validSteamId(id)) throw new SteamError("invalid", "无效的 Steam ID");
+    return parsePublicGroups(await this.get(`profiles/${id}/groups/`), id);
+  }
   async profile(id: string): Promise<PublicProfileDetails> {
     if (!validSteamId(id)) throw new SteamError("invalid", "无效的 Steam ID");
     return parsePublicProfile(await this.get(`profiles/${id}/`), id);
@@ -162,6 +174,18 @@ export const demoIds = [
   ),
 ];
 export class DemoProvider implements Provider {
+  async groups(id: string): Promise<PublicGroups> {
+    const index = demoIds.indexOf(id);
+    if (index === 12) throw new SteamError("private", "演示：群组列表未公开");
+    if (index < 0 || index === 11) return { groups: [], totalCount: 0 };
+    const groups = [index % 4, (index + 1) % 4].map((number) => ({
+      id: String(103582791429521500n + BigInt(number)),
+      name: `演示群组 ${number + 1} · 虚构`,
+      url: `https://steamcommunity.com/gid/${103582791429521500n + BigInt(number)}`,
+      memberCount: [12, 250, 12000, 600][number],
+    }));
+    return { groups, totalCount: groups.length };
+  }
   async profile(id: string): Promise<PublicProfileDetails> {
     const index = demoIds.indexOf(id);
     if (index === 12) throw new SteamError("private", "演示：资料未公开");

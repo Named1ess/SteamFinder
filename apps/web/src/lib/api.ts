@@ -9,6 +9,7 @@ import type {
   PlayerDetailsSnapshot,
   PlayerSearchResponse,
   RelationshipScoresResponse,
+  RunGroupsResponse,
 } from "../../../../packages/shared/src/index";
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -91,6 +92,15 @@ export const api = {
       `/runs/${encodeURIComponent(id)}/relationship-scores?${new URLSearchParams({ center })}`,
       { signal },
     ),
+  runGroups: (id: string, signal?: AbortSignal) =>
+    request<RunGroupsResponse>(`/runs/${encodeURIComponent(id)}/groups`, {
+      signal,
+    }),
+  collectGroups: (id: string, refresh: boolean, maxRequests: number) =>
+    request<RunGroupsResponse>(`/runs/${encodeURIComponent(id)}/groups`, {
+      method: "POST",
+      body: JSON.stringify({ refresh, maxRequests }),
+    }),
   collectGameScores: (id: string, refresh: boolean, maxRequests: number) =>
     request<GameScoresResponse>(`/runs/${encodeURIComponent(id)}/game-scores`, {
       method: "POST",
