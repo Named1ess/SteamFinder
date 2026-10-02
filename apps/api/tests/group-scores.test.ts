@@ -14,8 +14,9 @@ import {
 } from "../src/group-scores.js";
 
 const databaseIt = process.env.RUN_DATABASE_TESTS === "true" ? it : it.skip;
+// Keep this bulk fixture range separate from other parallel database tests.
 const ids = Array.from({ length: 1002 }, (_, i) =>
-  String(76561200100009000n + BigInt(i)),
+  String(76561200100030000n + BigInt(i)),
 );
 const groups: PublicGroups = {
   groups: [
