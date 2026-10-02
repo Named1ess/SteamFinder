@@ -39,6 +39,7 @@ import type {
 } from "../../../packages/shared/src/index";
 import { DEFAULT_ROOT } from "../../../packages/shared/src/index";
 import { api } from "./lib/api";
+import { refreshQuerySnapshot } from "./lib/query-refresh";
 import {
   activeRun,
   fetchText,
@@ -201,12 +202,22 @@ export function App() {
   const run = current.data;
   useEffect(() => {
     if (run?.id)
-      void client.invalidateQueries({ queryKey: ["run-players", run.id] });
+      void refreshQuerySnapshot(client, ["run-players", run.id]);
   }, [client, run?.id, run?.nodeCount, run?.status]);
+  useEffect(() => {
+    // Polling can observe completion before SSE, so always read the final graph.
+    if (run?.id && !activeRun(run.status))
+      void refreshQuerySnapshot(client, ["graph", run.id]);
+  }, [client, run?.id, run?.status]);
   const graphQuery = useQuery({
     queryKey: ["graph", runId, displayLimit, displayDepth],
-    queryFn: () =>
-      api.graph(runId!, displayLimit, Math.min(displayDepth, run?.depth ?? 3)),
+    queryFn: ({ signal }) =>
+      api.graph(
+        runId!,
+        displayLimit,
+        Math.min(displayDepth, run?.depth ?? 3),
+        signal,
+      ),
     enabled: !!run,
     refetchInterval: activeRun(run?.status) ? 3500 : false,
   });
@@ -253,7 +264,9 @@ export function App() {
   };
   useEffect(() => {
     const pop = () => {
-      setRunId(getRunId());
+      const nextRunId = getRunId();
+      if (nextRunId === runId) return;
+      setRunId(nextRunId);
       setAnalysis(null);
       setSelectedId(null);
       setSearch("");
@@ -262,7 +275,7 @@ export function App() {
     };
     window.addEventListener("popstate", pop);
     return () => window.removeEventListener("popstate", pop);
-  }, []);
+  }, [runId]);
   useEffect(() => {
     if (!run) return;
     setFrom(run.rootId);
@@ -288,7 +301,7 @@ export function App() {
         client.setQueryData(["run", runId], next);
         if (Date.now() - lastGraphUpdate > 1200 || !activeRun(next.status)) {
           lastGraphUpdate = Date.now();
-          void client.invalidateQueries({ queryKey: ["graph", runId] });
+          void refreshQuerySnapshot(client, ["graph", runId]);
           void client.invalidateQueries({ queryKey: ["runs"] });
         }
       } catch {
@@ -311,7 +324,7 @@ export function App() {
   });
   const updateRun = (next: CrawlRun) => {
     client.setQueryData(["run", next.id], next);
-    void client.invalidateQueries({ queryKey: ["graph", next.id] });
+    void refreshQuerySnapshot(client, ["graph", next.id]);
     void client.invalidateQueries({ queryKey: ["runs"] });
   };
   const cancel = useMutation({
@@ -635,6 +648,7 @@ export function App() {
                   analyze.reset();
                   void config.refetch();
                   if (runId) void current.refetch();
+                  if (run) void graphQuery.refetch();
                 }}
               >
                 重试读取

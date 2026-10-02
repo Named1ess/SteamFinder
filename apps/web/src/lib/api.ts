@@ -37,9 +37,10 @@ export const api = {
     ),
   runs: () => request<{ runs: CrawlRun[] }>("/runs"),
   run: (id: string) => request<CrawlRun>(`/runs/${encodeURIComponent(id)}`),
-  graph: (id: string, limit: number, depth: number) =>
+  graph: (id: string, limit: number, depth: number, signal?: AbortSignal) =>
     request<GraphResponse>(
       `/runs/${encodeURIComponent(id)}/graph?limit=${limit}&depth=${depth}`,
+      { signal },
     ),
   create: (input: CreateRunInput) =>
     request<CreateRunResult>("/runs", {
@@ -81,8 +82,10 @@ export const api = {
       { signal },
     );
   },
-  gameScores: (id: string) =>
-    request<GameScoresResponse>(`/runs/${encodeURIComponent(id)}/game-scores`),
+  gameScores: (id: string, signal?: AbortSignal) =>
+    request<GameScoresResponse>(`/runs/${encodeURIComponent(id)}/game-scores`, {
+      signal,
+    }),
   relationshipScores: (id: string, center: string, signal?: AbortSignal) =>
     request<RelationshipScoresResponse>(
       `/runs/${encodeURIComponent(id)}/relationship-scores?${new URLSearchParams({ center })}`,

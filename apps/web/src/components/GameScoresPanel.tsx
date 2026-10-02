@@ -22,6 +22,7 @@ import type {
   GameScoreRow,
 } from "../../../../packages/shared/src/index";
 import { api } from "../lib/api";
+import { replaceQuerySnapshot } from "../lib/query-refresh";
 import { activeRun, initials, statusText } from "../lib/graph";
 import {
   formatGameHours,
@@ -106,7 +107,7 @@ export function GameScoresPanel({ run }: { run?: CrawlRun }) {
   const queryKey = ["game-scores", run?.id];
   const query = useQuery({
     queryKey,
-    queryFn: () => api.gameScores(run!.id),
+    queryFn: ({ signal }) => api.gameScores(run!.id, signal),
     enabled: !!run,
     refetchInterval: (current) =>
       activeRun(current.state.data?.job?.status) ? 2500 : false,
@@ -114,8 +115,8 @@ export function GameScoresPanel({ run }: { run?: CrawlRun }) {
   const collect = useMutation({
     mutationFn: (refresh: boolean) =>
       api.collectGameScores(run!.id, refresh, budget),
-    onSuccess: (response) => {
-      client.setQueryData(queryKey, response);
+    onSuccess: async (response) => {
+      await replaceQuerySnapshot(client, queryKey, response);
       setPage(0);
     },
   });
