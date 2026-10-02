@@ -50,6 +50,7 @@ import {
 } from "./lib/graph";
 import { Badge, Button, Input, cn } from "./components/ui";
 import { GameScoresPanel } from "./components/GameScoresPanel";
+import { RelationshipScoresPanel } from "./components/RelationshipScoresPanel";
 import { PlayerCombobox } from "./components/PlayerCombobox";
 import {
   ProfileHoverProvider,
@@ -399,6 +400,11 @@ export function App() {
               连接分析
               <ChevronRight size={14} />
             </button>
+            <a className="nav-item" href="#relationship-scores">
+              <Layers3 size={17} />
+              关系分层
+              <ChevronRight size={14} />
+            </a>
           </div>
           <div className="sidebar-divider" />
           <form className="query-form" onSubmit={submit}>
@@ -1395,6 +1401,7 @@ export function App() {
               </div>
             </aside>
           </div>
+          <RelationshipScoresPanel key={`relationships:${run?.id ?? "no-run"}`} run={run} />
           <GameScoresPanel key={run?.id ?? "no-run"} run={run} />
           <footer className="workspace-footer">
             <span>

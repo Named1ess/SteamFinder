@@ -6,6 +6,7 @@ import "./styles.css";
 import "./game-scores.css";
 import "./profile-hover.css";
 import "./player-combobox.css";
+import "./relationship-scores.css";
 
 const client = new QueryClient({
   defaultOptions: {

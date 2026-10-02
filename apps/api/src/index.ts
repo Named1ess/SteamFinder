@@ -16,6 +16,7 @@ import { createSearch } from "./search.js";
 import { getGameScores, startGameScoreJob } from "./game-scores.js";
 import { collectPlayerDetails, getPlayerDetails } from "./player-details.js";
 import { playerSearchQuerySchema, searchRunPlayers } from "./player-search.js";
+import { getRelationshipScores, relationshipScoresQuerySchema } from "./relationship-scores.js";
 const app = Fastify({ logger: false, bodyLimit: 8192 });
 const provider =
   config.mode === "demo" ? new DemoProvider() : new PublicWebProvider();
@@ -86,6 +87,9 @@ app.get("/api/runs/:id/players", async (request) =>
   searchRunPlayers(idFrom(request), parse(playerSearchQuerySchema, request.query)),
 );
 app.get("/api/runs/:id/game-scores", async (request) => getGameScores(idFrom(request)));
+app.get("/api/runs/:id/relationship-scores", async (request) =>
+  getRelationshipScores(idFrom(request), parse(relationshipScoresQuerySchema, request.query).center),
+);
 app.post("/api/runs/:id/game-scores", async (request) => {
   const id = idFrom(request);
   const options = parse(

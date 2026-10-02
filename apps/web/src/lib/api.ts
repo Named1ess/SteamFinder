@@ -8,6 +8,7 @@ import type {
   GameScoresResponse,
   PlayerDetailsSnapshot,
   PlayerSearchResponse,
+  RelationshipScoresResponse,
 } from "../../../../packages/shared/src/index";
 
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -82,6 +83,11 @@ export const api = {
   },
   gameScores: (id: string) =>
     request<GameScoresResponse>(`/runs/${encodeURIComponent(id)}/game-scores`),
+  relationshipScores: (id: string, center: string, signal?: AbortSignal) =>
+    request<RelationshipScoresResponse>(
+      `/runs/${encodeURIComponent(id)}/relationship-scores?${new URLSearchParams({ center })}`,
+      { signal },
+    ),
   collectGameScores: (id: string, refresh: boolean, maxRequests: number) =>
     request<GameScoresResponse>(`/runs/${encodeURIComponent(id)}/game-scores`, {
       method: "POST",

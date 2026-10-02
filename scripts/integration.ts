@@ -6,6 +6,7 @@ import type {
   CreateRunResult,
   GraphResponse,
   PlayerSearchResponse,
+  RelationshipScoresResponse,
 } from "../packages/shared/src/index.ts";
 
 const base = process.env.TEST_BASE_URL ?? "http://localhost:8080";
@@ -111,6 +112,49 @@ async function main() {
   assert.equal(outsidePath.path.at(-1), outside.id);
   console.log(
     "PASS: searchable analysis players cover the entire saved run beyond the display cap",
+  );
+  const relationships = await request<RelationshipScoresResponse>(
+    `/runs/${run.id}/relationship-scores`,
+  );
+  assert.equal(relationships.center.id, run.rootId);
+  assert.equal(relationships.totalPlayers, graph.totalNodes - 1);
+  assert.equal(relationships.rows.length, graph.totalNodes - 1);
+  assert.equal(relationships.totalEdges, graph.totalEdges);
+  assert.equal(
+    relationships.layers.reduce((sum, layer) => sum + layer.count, 0),
+    relationships.rows.length,
+  );
+  assert.ok(relationships.rows.some((row) => row.player.id === outside.id));
+  assert.ok(relationships.rows.every((row) => row.player.id !== run.rootId));
+  for (const row of relationships.rows) {
+    if (row.score === null) {
+      assert.equal(row.layer, "unknown");
+      assert.equal(row.distance, null);
+    } else {
+      assert.ok(row.score >= 0 && row.score <= 100);
+      assert.equal(
+        row.score,
+        Math.round(
+          Object.values(row.components).reduce((a, b) => a + b, 0) * 10,
+        ) / 10,
+      );
+    }
+    assert.ok(row.commonFriends.length <= 5);
+  }
+  for (let i = 1; i < relationships.rows.length; i++) {
+    assert.ok(
+      (relationships.rows[i - 1].score ?? -1) >=
+        (relationships.rows[i].score ?? -1),
+    );
+  }
+  const otherCenter = await request<RelationshipScoresResponse>(
+    `/runs/${run.id}/relationship-scores?center=${outside.id}`,
+  );
+  assert.equal(otherCenter.center.id, outside.id);
+  assert.ok(otherCenter.rows.some((row) => row.player.id === run.rootId));
+  assert.ok(otherCenter.rows.every((row) => row.player.id !== outside.id));
+  console.log(
+    "PASS: full persisted graph relationship layers, bounded evidence, score decomposition and selectable center",
   );
   const reused = await request<CreateRunResult>("/runs", input);
   assert.equal(reused.cached, true);

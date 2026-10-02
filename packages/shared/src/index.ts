@@ -62,6 +62,50 @@ export interface PlayerSearchResponse {
   total: number;
   selected: PlayerSearchOption | null;
 }
+export type RelationshipLayer =
+  | "core"
+  | "close"
+  | "connected"
+  | "peripheral"
+  | "unknown";
+export interface RelationshipScoreRow {
+  player: PlayerSearchOption;
+  score: number | null;
+  layer: RelationshipLayer;
+  distance: number | null;
+  isDirect: boolean;
+  mutualCount: number;
+  weightedMutual: number;
+  overlap: number;
+  threeHopPaths: number;
+  weightedIndirect: number;
+  components: {
+    direct: number;
+    mutual: number;
+    overlap: number;
+    indirect: number;
+  };
+  commonFriends: PlayerSearchOption[];
+  evidence: "complete" | "partial";
+}
+export interface RelationshipScoresResponse {
+  runId: string;
+  center: PlayerSearchOption;
+  algorithmVersion: "mutual-network-v1";
+  computedAt: string;
+  sourceUpdatedAt: string;
+  totalPlayers: number;
+  totalEdges: number;
+  coverage: { completeLists: number; totalLists: number };
+  layers: {
+    id: RelationshipLayer;
+    label: string;
+    minScore: number | null;
+    maxScore: number | null;
+    count: number;
+  }[];
+  rows: RelationshipScoreRow[];
+}
 export interface GraphStats {
   layers: { depth: number; count: number }[];
   communities: { id: number; size: number }[];
