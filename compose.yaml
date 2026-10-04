@@ -15,6 +15,7 @@ x-backend: &backend
     API_PORT: 3001
     STEAM_REQUEST_DELAY_MS: ${STEAM_REQUEST_DELAY_MS:-2000}
     DAILY_REQUEST_LIMIT: ${DAILY_REQUEST_LIMIT:-10000}
+    TRUSTED_HOSTS: "${TRUSTED_HOSTS:-localhost 127.0.0.1 [::1] web api}"
     NODE_ENV: production
   init: true
 
@@ -54,7 +55,7 @@ services:
           "CMD",
           "node",
           "-e",
-          "fetch('http://127.0.0.1:3001/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+          "require('node:http').get('http://127.0.0.1:3001/api/health',{headers:{Host:(process.env.TRUSTED_HOSTS||'localhost').trim().split(/\\s+/)[0]}},r=>{r.resume();process.exit(r.statusCode===200?0:1)}).on('error',()=>process.exit(1))",
         ]
       interval: 5s
       timeout: 3s
@@ -76,13 +77,15 @@ services:
     build:
       context: .
       target: web
+    environment:
+      TRUSTED_HOSTS: "${TRUSTED_HOSTS:-localhost 127.0.0.1 [::1] web api}"
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-8080}:80"
     depends_on:
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/api/health"]
+      test: ["CMD-SHELL", "set -f; set -- $$TRUSTED_HOSTS; wget -q -O /dev/null --header \"Host: $$1\" http://127.0.0.1/api/health"]
       interval: 10s
       timeout: 3s
       retries: 10

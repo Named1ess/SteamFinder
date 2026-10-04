@@ -21,7 +21,9 @@ import { registerSavedViewRoutes } from "./saved-views.js";
 import { registerGraphFilterRoutes } from "./graph-filters.js";
 import { registerMultiFriendRoutes } from "./multi-friends.js";
 import { getRelationshipScores, relationshipScoresQuerySchema, relationshipPageQuerySchema, getRelationshipScorePage, getRelationshipOverview, getRelationshipScoreDetail } from "./relationship-scores.js";
+import { registerRequestSecurity } from "./request-security.js";
 const app = Fastify({ logger: false, bodyLimit: 8192 });
+registerRequestSecurity(app, config.trustedHosts);
 const provider =
   config.mode === "demo" ? new DemoProvider() : new PublicWebProvider();
 const createSchema = z

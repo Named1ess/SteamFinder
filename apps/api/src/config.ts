@@ -9,6 +9,7 @@ export const config = {
     `postgres://${encodeURIComponent(process.env.PGUSER ?? "steamfinder")}:${encodeURIComponent(process.env.PGPASSWORD ?? "steamfinder")}@${process.env.PGHOST ?? "localhost"}:${process.env.PGPORT ?? "5432"}/${encodeURIComponent(process.env.PGDATABASE ?? "steamfinder")}`,
   mode: (process.env.STEAM_MODE === "demo" ? "demo" : "live") as DataMode,
   port: Number(process.env.API_PORT ?? 3001),
+  trustedHosts: process.env.TRUSTED_HOSTS ?? "localhost 127.0.0.1 [::1] web api",
   delay:
     process.env.STEAM_MODE === "demo"
       ? 20
